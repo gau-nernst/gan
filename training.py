@@ -1,119 +1,123 @@
+from typing import Literal
+
+import pytorch_lightning as pl
 import torch
 import torch.nn.functional as F
+from pytorch_lightning.core.optimizer import LightningOptimizer
 from torch import Tensor, nn
-from torch.optim import Optimizer
 
 
-def _generate(G: nn.Module, z_dim: int, bsize: int, device):
-    z_noise = torch.randn(bsize, z_dim, device=device)
-    return G(z_noise)
+class GANSystem(pl.LightningModule):
+    def __init__(
+        self,
+        D: nn.Module,
+        G: nn.Module,
+        z_dim: int,
+        method: Literal["gan", "wgan", "wgan-gp"] = "gan",
+        label_smoothing: float = 0.0,
+        clip: float = 0.01,
+        lamb: float = 10.0,
+        train_g_interval: int = 1,
+        log_img_interval: int = 1000,
+    ):
+        super().__init__()
+        self.D = D
+        self.G = G
+        self.save_hyperparameters(ignore=["D", "G"])
+
+        self.automatic_optimization = False
+
+    def generate(self, bsize: int):
+        z_noise = torch.randn(bsize, self.hparams["z_dim"], device=self.device)
+        return self.G(z_noise)
+
+    def _optim_step(self, loss: torch.Tensor, optim: LightningOptimizer):
+        optim.zero_grad()
+        self.manual_backward(loss)
+        optim.step()
+
+    def configure_optimizers(self):
+        optim_d = torch.optim.Adam(self.D.parameters(), 1e-4, betas=(0.5, 0.999))
+        optim_g = torch.optim.Adam(self.G.parameters(), 1e-4, betas=(0.5, 0.999))
+        return optim_d, optim_g
+
+    def configure_callbacks(self):
+        fixed_noise = torch.randn((32, self.hparams["z_dim"]))
+        return [ImageLoggingCallback(self.hparams["log_img_interval"], fixed_noise)]
+
+    def training_step(self, batch: torch.Tensor, batch_idx: int):
+        x_reals, _ = batch
+        optim_d, optim_g = self.optimizers()
+        bsize = x_reals.size(0)
+        method = self.hparams["method"]
+
+        # train D
+        with torch.no_grad():
+            x_fakes = self.generate(bsize)
+        d_reals, d_fakes = map(self.D, (x_reals, x_fakes))
+
+        if method == "gan":
+            loss_d_real = -F.logsigmoid(d_reals).mean() * (1.0 - self.hparams["label_smoothing"])
+            loss_d_fake = -F.logsigmoid(-d_fakes).mean()
+            loss_d = loss_d_real + loss_d_fake
+
+        elif method in ("wgan", "wgan-gp"):
+            loss_d = d_fakes.mean() - d_reals.mean()
+
+            if method == "wgan-gp":
+                alpha = torch.rand(bsize, 1, 1, 1, device=self.device)
+                x_inters = (x_reals * alpha + x_fakes * (1 - alpha)).requires_grad_()
+                d_inters = self.D(x_inters)
+
+                d_grad = torch.autograd.grad(d_inters, x_inters, torch.ones_like(d_inters), create_graph=True)[0]
+                d_grad_norm = torch.linalg.vector_norm(d_grad, dim=(1, 2, 3))
+                loss_d = loss_d + self.hparams["lamb"] * ((d_grad_norm - 1) ** 2).mean()
+
+        else:
+            raise ValueError
+
+        self._optim_step(loss_d, optim_d)
+        self.log("loss_d", loss_d)
+
+        if method == "wgan":
+            clip = self.hparams["clip"]
+            with torch.no_grad():
+                for param in self.D.parameters():
+                    param.clip_(-clip, clip)
+
+        # train G
+        if (batch_idx + 1) % self.hparams["train_g_interval"] == 0:
+            d_fakes = self.D(self.generate(bsize))
+
+            if method == "gan":
+                loss_g = -F.logsigmoid(d_fakes).mean()
+
+            elif method in ("wgan", "wgan-gp"):
+                loss_g = -self.D(self.generate(bsize)).mean()
+
+            else:
+                raise ValueError
+
+            self._optim_step(loss_g, optim_g)
+            self.log("loss_g", loss_g)
 
 
-def _optim_step(loss: torch.Tensor, optim: Optimizer):
-    optim.zero_grad()
-    loss.backward()
-    optim.step()
+class ImageLoggingCallback(pl.Callback):
+    def __init__(self, log_interval: int, fixed_noise: Tensor):
+        super().__init__()
+        self.log_interval = log_interval
+        self.fixed_noise = fixed_noise
 
+    @torch.no_grad()
+    def _log_images(self, pl_module: GANSystem):
+        images = pl_module.G(self.fixed_noise)
+        pl_module.logger.experiment.add_images("generated", images, pl_module.global_step // 2)
 
-def gan_train_step(
-    D: nn.Module,
-    G: nn.Module,
-    x_reals: Tensor,
-    z_dim: int,
-    optim_d: Optimizer,
-    optim_g: Optimizer,
-    label_smoothing: float = 0.0,
-):
-    bsize = x_reals.size(0)
-    device = x_reals.device
+    def on_train_start(self, trainer: pl.Trainer, pl_module: GANSystem) -> None:
+        if trainer.is_global_zero:
+            self.fixed_noise = self.fixed_noise.to(pl_module.device)
+            self._log_images(pl_module)
 
-    # train D
-    with torch.no_grad():
-        x_fakes = _generate(G, z_dim, bsize, device)
-    d_reals, d_fakes = map(D, (x_reals, x_fakes))
-    loss_d_real = -F.logsigmoid(d_reals).mean() * (1.0 - label_smoothing)
-    loss_d_fake = -F.logsigmoid(-d_fakes).mean()
-    loss_d = loss_d_real + loss_d_fake
-    _optim_step(loss_d, optim_d)
-
-    # train G
-    d_fakes = D(_generate(G, z_dim, bsize, device))
-    loss_g = -F.logsigmoid(d_fakes).mean()
-    _optim_step(loss_g, optim_g)
-
-    return dict(loss_d=loss_d.item(), loss_g=loss_g.item())
-
-
-def wgan_train_step(
-    D: nn.Module,
-    G: nn.Module,
-    x_reals: Tensor,
-    z_dim: int,
-    optim_d: Optimizer,
-    optim_g: Optimizer,
-    weight_clipping: float = 0.01,
-    train_g: bool = True,
-):
-    bsize = x_reals.size(0)
-    device = x_reals.device
-
-    # train D
-    with torch.no_grad():
-        x_fakes = _generate(G, z_dim, bsize, device)
-    d_reals, d_fakes = map(D, (x_reals, x_fakes))
-    loss_d = d_fakes.mean() - d_reals.mean()
-    _optim_step(loss_d, optim_d)
-    loss_dict = dict(loss_d=loss_d.item())
-
-    with torch.no_grad():
-        for param in D.parameters():
-            param.clip_(-weight_clipping, weight_clipping)
-
-    # train G
-    if train_g:
-        optim_g.zero_grad()
-        loss_g = -D(_generate(G, z_dim, bsize, device)).mean()
-        _optim_step(loss_g, optim_g)
-        loss_dict.update(loss_g=loss_g.item())
-
-    return loss_dict
-
-
-def wgangp_train_step(
-    D: nn.Module,
-    G: nn.Module,
-    x_reals: Tensor,
-    z_dim: int,
-    optim_d: Optimizer,
-    optim_g: Optimizer,
-    lamb: float = 10.0,
-    train_g: bool = True,
-):
-    bsize = x_reals.size(0)
-    device = x_reals.device
-
-    # train D
-    with torch.no_grad():
-        x_fakes = _generate(G, z_dim, bsize, device)
-    d_reals, d_fakes = map(D, (x_reals, x_fakes))
-    loss_d = d_fakes.mean() - d_reals.mean()
-
-    alpha = torch.rand(bsize, 1, 1, 1, device=device)
-    x_inters = (x_reals * alpha + x_fakes * (1 - alpha)).requires_grad_()
-    d_inters = D(x_inters)
-
-    d_grad = torch.autograd.grad(d_inters, x_inters, torch.ones_like(d_inters), create_graph=True)[0]
-    d_grad_norm = torch.linalg.vector_norm(d_grad, dim=(1, 2, 3))
-    loss_d = loss_d + lamb * ((d_grad_norm - 1) ** 2).mean()
-    
-    _optim_step(loss_d, optim_d)
-    loss_dict = dict(loss_d=loss_d.item())
-
-    # train G
-    if train_g:
-        optim_g.zero_grad()
-        loss_g = -D(_generate(G, z_dim, bsize, device)).mean()
-        _optim_step(loss_g, optim_g)
-        loss_dict.update(loss_g=loss_g.item())
-
-    return loss_dict
+    def on_train_batch_end(self, trainer: pl.Trainer, pl_module: GANSystem, *args) -> None:
+        if trainer.is_global_zero and (pl_module.global_step // 2) % self.log_interval == 0:
+            self._log_images(pl_module)
