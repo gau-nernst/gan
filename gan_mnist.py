@@ -54,8 +54,8 @@ def main():
     init_module(G, "relu")
 
     gan = GANSystem(
-        D=D,
-        G=G,
+        discriminator=D,
+        generator=G,
         z_dim=args.z_dim,
         method=args.method,
         log_img_interval=args.log_interval,
