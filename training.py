@@ -19,6 +19,12 @@ class GANSystem(pl.LightningModule):
         lamb: float = 10.0,
         train_g_interval: int = 1,
         log_img_interval: int = 1000,
+        optimizer: Literal["SGD", "Adam", "AdamW", "RMSprop"] = "Adam",
+        lr: float = 2e-4,
+        weight_decay: float = 2e-4,
+        beta1: float = 0.5,
+        beta2: float = 0.999,
+        **kwargs,
     ):
         super().__init__()
         self.discriminator = discriminator
@@ -37,8 +43,13 @@ class GANSystem(pl.LightningModule):
         optim.step()
 
     def configure_optimizers(self):
-        optim_d = torch.optim.Adam(self.discriminator.parameters(), 1e-4, betas=(0.5, 0.999))
-        optim_g = torch.optim.Adam(self.generator.parameters(), 1e-4, betas=(0.5, 0.999))
+        optim_cls = getattr(torch.optim, self.hparams["optimizer"])
+        kwargs = dict(lr=self.hparams["lr"], weight_decay=self.hparams["weight_decay"])
+        if self.hparams["optimizer"] in ("Adam", "AdamW"):
+            kwargs.update(betas=(self.hparams["beta1"], self.hparams["beta2"]))
+        
+        optim_d = optim_cls(self.discriminator.parameters(), **kwargs)
+        optim_g = optim_cls(self.generator.parameters(), **kwargs)
         return optim_d, optim_g
 
     def configure_callbacks(self):
@@ -110,7 +121,7 @@ class ImageLoggingCallback(pl.Callback):
 
     @torch.no_grad()
     def _log_images(self, pl_module: GANSystem):
-        images = pl_module.generator(self.fixed_noise)
+        images = pl_module.generator(self.fixed_noise).mul_(0.5).add_(0.5)
         pl_module.logger.experiment.add_images("generated", images, pl_module.global_step)
 
     def on_train_start(self, trainer: pl.Trainer, pl_module: GANSystem) -> None:

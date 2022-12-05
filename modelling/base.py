@@ -2,9 +2,8 @@ from typing import Callable, Optional
 
 from torch import nn
 
-from utils import _Act, _Norm
-
-_LEAKY_RELU_NEGATIVE_SLOPE = 0.2
+_Norm = Callable[[int], nn.Module]
+_Act = Callable[[], nn.Module]
 
 
 def conv_norm_act(
@@ -30,16 +29,3 @@ def make_layers(in_dim: int, layer_configs, **kwargs):
         layers.append(conv_norm_act(in_dim, out_dim, *args, **kwargs))
         in_dim = out_dim
     return layers
-
-
-def init_module(module: nn.Module, nonlinearity: str = "relu"):
-    for m in (module, *module.modules()):
-        if isinstance(m, nn.modules.conv._ConvNd):
-            nn.init.kaiming_normal_(m.weight, a=_LEAKY_RELU_NEGATIVE_SLOPE, nonlinearity=nonlinearity)
-            if m.bias is not None:
-                nn.init.zeros_(m.bias)
-
-
-class LeakyReLU(nn.LeakyReLU):
-    def __init__(self):
-        super().__init__(_LEAKY_RELU_NEGATIVE_SLOPE, True)
