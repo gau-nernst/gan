@@ -1,9 +1,8 @@
-from typing import Literal
-
 import pytorch_lightning as pl
 import torch
 import torch.nn.functional as F
 from pytorch_lightning.core.optimizer import LightningOptimizer
+from pytorch_lightning.loggers import TensorBoardLogger, WandbLogger
 from torch import Tensor, nn
 
 
@@ -12,20 +11,23 @@ class GANSystem(pl.LightningModule):
         self,
         discriminator: nn.Module,
         generator: nn.Module,
-        z_dim: int,
-        method: Literal["gan", "wgan", "wgan-gp"] = "gan",
+        z_dim: int = 128,
+        method: str = "gan",
         label_smoothing: float = 0.0,
         clip: float = 0.01,
         lamb: float = 10.0,
         train_g_interval: int = 1,
         log_img_interval: int = 1000,
-        optimizer: Literal["SGD", "Adam", "AdamW", "RMSprop"] = "Adam",
+        optimizer: str = "Adam",
         lr: float = 2e-4,
-        weight_decay: float = 2e-4,
+        weight_decay: float = 0,
         beta1: float = 0.5,
         beta2: float = 0.999,
         **kwargs,
     ):
+        assert method in ("gan", "wgan", "wgan-gp")
+        assert optimizer in ("SGD", "Adam", "AdamW", "RMSprop")
+        assert clip > 0
         super().__init__()
         self.discriminator = discriminator
         self.generator = generator
@@ -47,7 +49,7 @@ class GANSystem(pl.LightningModule):
         kwargs = dict(lr=self.hparams["lr"], weight_decay=self.hparams["weight_decay"])
         if self.hparams["optimizer"] in ("Adam", "AdamW"):
             kwargs.update(betas=(self.hparams["beta1"], self.hparams["beta2"]))
-        
+
         optim_d = optim_cls(self.discriminator.parameters(), **kwargs)
         optim_g = optim_cls(self.generator.parameters(), **kwargs)
         return optim_d, optim_g
@@ -90,6 +92,8 @@ class GANSystem(pl.LightningModule):
         self._optim_step(loss_d, optim_d)
         self.log("loss_d", loss_d)
 
+        # Algorithm 1 in paper clip weights after optimizer step, but GitHub code clip before optimizer step
+        # it doesn't seem to matter much in practice
         if method == "wgan":
             clip = self.hparams["clip"]
             with torch.no_grad():
@@ -98,19 +102,21 @@ class GANSystem(pl.LightningModule):
 
         # train G
         if (batch_idx + 1) % self.hparams["train_g_interval"] == 0:
+            self.discriminator.requires_grad_(False)
             d_fakes = self.discriminator(self.generate(bsize))
 
             if method == "gan":
                 loss_g = -F.logsigmoid(d_fakes).mean()
 
             elif method in ("wgan", "wgan-gp"):
-                loss_g = -self.discriminator(self.generate(bsize)).mean()
+                loss_g = -d_fakes.mean()
 
             else:
                 raise ValueError
 
             self._optim_step(loss_g, optim_g)
             self.log("loss_g", loss_g)
+            self.discriminator.requires_grad_(True)
 
 
 class ImageLoggingCallback(pl.Callback):
@@ -122,7 +128,11 @@ class ImageLoggingCallback(pl.Callback):
     @torch.no_grad()
     def _log_images(self, pl_module: GANSystem):
         images = pl_module.generator(self.fixed_noise).mul_(0.5).add_(0.5)
-        pl_module.logger.experiment.add_images("generated", images, pl_module.global_step)
+        logger = pl_module.logger
+        if isinstance(logger, TensorBoardLogger):
+            logger.experiment.add_images("generated", images, pl_module.global_step)
+        elif isinstance(logger, WandbLogger):
+            logger.log_image("generated", images)
 
     def on_train_start(self, trainer: pl.Trainer, pl_module: GANSystem) -> None:
         if trainer.is_global_zero:

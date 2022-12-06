@@ -2,37 +2,58 @@ from functools import partial
 
 from torch import nn
 
-from .base import _Act, _Norm, conv_norm_act, make_layers
+from .base import _Act, _Norm, conv_norm_act
 
 
 class Discriminator(nn.Sequential):
-    def __init__(self, norm: _Norm = nn.BatchNorm2d, act: _Act = partial(nn.LeakyReLU, 0.2, True)):
+    def __init__(
+        self,
+        img_size: int = 64,
+        img_depth: int = 3,
+        norm: _Norm = nn.BatchNorm2d,
+        act: _Act = partial(nn.LeakyReLU, 0.2, True),
+    ):
         super().__init__()
         kwargs = dict(kernel_size=4, stride=2, padding=1, norm=norm, act=act)
-        layer_configs = [[64], [128], [256], [512]]
-        self.convs = nn.Sequential(*make_layers(3, layer_configs, **kwargs))
-        self.out_conv = nn.Conv2d(512, 1, 4)
+        depth_list = [64, 128, 256, 512]
+        last_feat_map_size = img_size // 2 ** len(depth_list)
+
+        for depth in depth_list:
+            self.append(conv_norm_act(img_depth, depth, **kwargs))
+            img_depth = depth
+        self.append(nn.Conv2d(img_depth, 1, last_feat_map_size))
 
         self.apply(init_weights)
 
 
 class Generator(nn.Module):
-    def __init__(self, z_dim: int, norm: _Norm = nn.BatchNorm2d, act: _Act = nn.ReLU):
+    def __init__(
+        self,
+        img_size: int = 64,
+        img_depth: int = 3,
+        z_dim: int = 128,
+        norm: _Norm = nn.BatchNorm2d,
+        act: _Act = partial(nn.ReLU, True),
+    ):
         super().__init__()
         kwargs = dict(conv=nn.ConvTranspose2d, norm=norm, act=act)
-        self.in_conv = conv_norm_act(z_dim, 512, 4, **kwargs)
-        layer_configs = [[256], [128], [64], [32]]
-        self.ups = nn.Sequential(
-            *make_layers(512, layer_configs, kernel_size=4, stride=2, padding=1, **kwargs),
-            nn.Conv2d(32, 3, 3, padding=1),
-            nn.Tanh(),
-        )
+        depth_list = [512, 256, 128, 64]
+        first_feat_map_size = img_size // 2 ** len(depth_list)
+
+        self.convs = nn.Sequential()
+        self.convs.append(conv_norm_act(z_dim, depth_list[0], first_feat_map_size, **kwargs))
+        in_depth = depth_list[0]
+        kwargs.update(kernel_size=4, stride=2, padding=1)
+        for depth in depth_list[1:]:
+            self.convs.append(conv_norm_act(in_depth, depth, **kwargs))
+            in_depth = depth
+        kwargs.update(norm=None, act=nn.Tanh)
+        self.convs.append(conv_norm_act(in_depth, img_depth, **kwargs))
 
         self.apply(init_weights)
-    
+
     def forward(self, x):
-        x = self.in_conv(x[:, :, None, None])
-        return self.ups(x)
+        return self.convs(x[:, :, None, None])
 
 
 # https://github.com/soumith/dcgan.torch/blob/master/main.lua#L42
