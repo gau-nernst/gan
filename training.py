@@ -1,3 +1,5 @@
+from typing import Optional, Tuple
+
 import pytorch_lightning as pl
 import torch
 import torch.nn.functional as F
@@ -11,13 +13,13 @@ class GANSystem(pl.LightningModule):
         self,
         discriminator: nn.Module,
         generator: nn.Module,
+        condition_encoder: Optional[nn.Module] = None,
         z_dim: int = 128,
         method: str = "gan",
         label_smoothing: float = 0.0,
         clip: float = 0.01,
         lamb: float = 10.0,
         train_g_interval: int = 1,
-        log_img_interval: int = 1000,
         optimizer: str = "Adam",
         lr: float = 2e-4,
         weight_decay: float = 0,
@@ -31,15 +33,16 @@ class GANSystem(pl.LightningModule):
         super().__init__()
         self.discriminator = discriminator
         self.generator = generator
-        self.save_hyperparameters(ignore=["discriminator", "generator"])
+        self.condition_encoder = condition_encoder
+        self.save_hyperparameters(ignore=["discriminator", "generator", "condition_encoder"])
 
         self.automatic_optimization = False
 
-    def generate(self, bsize: int):
+    def generate(self, bsize: int, y_embs: Optional[Tensor] = None) -> Tensor:
         z_noise = torch.randn(bsize, self.hparams["z_dim"], device=self.device)
-        return self.generator(z_noise)
+        return self.generator(z_noise, y_embs)
 
-    def _optim_step(self, loss: torch.Tensor, optim: LightningOptimizer):
+    def _optim_step(self, loss: Tensor, optim: LightningOptimizer):
         optim.zero_grad()
         self.manual_backward(loss)
         optim.step()
@@ -50,24 +53,27 @@ class GANSystem(pl.LightningModule):
         if self.hparams["optimizer"] in ("Adam", "AdamW"):
             kwargs.update(betas=(self.hparams["beta1"], self.hparams["beta2"]))
 
-        optim_d = optim_cls(self.discriminator.parameters(), **kwargs)
-        optim_g = optim_cls(self.generator.parameters(), **kwargs)
+        d_params = list(self.discriminator.parameters())
+        g_params = list(self.generator.parameters())
+        if self.condition_encoder is not None:
+            d_params.extend(self.condition_encoder.parameters())
+            g_params.extend(self.condition_encoder.parameters())
+
+        optim_d = optim_cls(d_params, **kwargs)
+        optim_g = optim_cls(g_params, **kwargs)
         return optim_d, optim_g
 
-    def configure_callbacks(self):
-        fixed_noise = torch.randn((32, self.hparams["z_dim"]))
-        return [ImageLoggingCallback(self.hparams["log_img_interval"], fixed_noise)]
-
-    def training_step(self, batch: torch.Tensor, batch_idx: int):
-        x_reals, _ = batch
+    def training_step(self, batch: Tuple[Tensor, Tensor], batch_idx: int):
+        x_reals, ys = batch
         optim_d, optim_g = self.optimizers()
         bsize = x_reals.size(0)
         method = self.hparams["method"]
 
         # train D
+        y_embs = self.condition_encoder(ys) if self.condition_encoder is not None else None
         with torch.no_grad():
-            x_fakes = self.generate(bsize)
-        d_reals, d_fakes = map(self.discriminator, (x_reals, x_fakes))
+            x_fakes = self.generate(bsize, y_embs)
+        d_reals, d_fakes = map(self.discriminator, (x_reals, x_fakes), (y_embs, y_embs))
 
         if method == "gan":
             loss_d_real = -F.logsigmoid(d_reals).mean() * (1.0 - self.hparams["label_smoothing"])
@@ -103,7 +109,9 @@ class GANSystem(pl.LightningModule):
         # train G
         if (batch_idx + 1) % self.hparams["train_g_interval"] == 0:
             self.discriminator.requires_grad_(False)
-            d_fakes = self.discriminator(self.generate(bsize))
+            y_embs = self.condition_encoder(ys) if self.condition_encoder is not None else None
+            x_fakes = self.generate(bsize, y_embs)
+            d_fakes = self.discriminator(x_fakes, y_embs)
 
             if method == "gan":
                 loss_g = -F.logsigmoid(d_fakes).mean()
@@ -118,25 +126,36 @@ class GANSystem(pl.LightningModule):
             self.log("loss_g", loss_g)
             self.discriminator.requires_grad_(True)
 
+    def validation_step(self, batch: Tuple[Tensor, Tensor], batch_idx: int):
+        pass
+
 
 class ImageLoggingCallback(pl.Callback):
-    def __init__(self, log_interval: int, fixed_noise: Tensor):
+    def __init__(self, log_interval: int, fixed_noise: Tensor, fixed_y: Optional[Tensor] = None):
         super().__init__()
         self.log_interval = log_interval
         self.fixed_noise = fixed_noise
+        self.fixed_y = fixed_y
 
     @torch.no_grad()
     def _log_images(self, pl_module: GANSystem):
-        images = pl_module.generator(self.fixed_noise).mul_(0.5).add_(0.5)
+        condition_encoder = pl_module.condition_encoder
+        generator = pl_module.generator
         logger = pl_module.logger
+        global_step = pl_module.global_step
+
+        y_embs = condition_encoder(self.fixed_y) if condition_encoder is not None else None
+        images = generator(self.fixed_noise, y_embs).mul_(0.5).add_(0.5)
         if isinstance(logger, TensorBoardLogger):
-            logger.experiment.add_images("generated", images, pl_module.global_step)
+            logger.experiment.add_images("generated", images, global_step)
         elif isinstance(logger, WandbLogger):
             logger.log_image("generated", images)
 
     def on_train_start(self, trainer: pl.Trainer, pl_module: GANSystem) -> None:
         if trainer.is_global_zero:
             self.fixed_noise = self.fixed_noise.to(pl_module.device)
+            if self.fixed_y is not None:
+                self.fixed_y = self.fixed_y.to(pl_module.device)
             self._log_images(pl_module)
 
     def on_train_batch_end(self, trainer: pl.Trainer, pl_module: GANSystem, *args) -> None:

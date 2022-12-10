@@ -21,11 +21,3 @@ def conv_norm_act(
         norm(out_dim) if norm is not None else nn.Identity(),
         act() if act is not None else nn.Identity(),
     )
-
-
-def make_layers(in_dim: int, layer_configs, **kwargs):
-    layers = []
-    for out_dim, *args in layer_configs:
-        layers.append(conv_norm_act(in_dim, out_dim, *args, **kwargs))
-        in_dim = out_dim
-    return layers

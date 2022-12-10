@@ -7,7 +7,7 @@ from pytorch_lightning.loggers import TensorBoardLogger
 from pytorch_lightning.utilities.argparse import add_argparse_args
 from torch.utils.data import DataLoader
 
-import modelling
+from modelling import dcgan
 from training import GANSystem
 from utils import get_parser
 
@@ -31,8 +31,8 @@ def main():
     args.logger = TensorBoardLogger("logs", name=args.log_name, version=timestamp)
 
     # DCGAN
-    D = modelling.dcgan.Discriminator(img_size=img_size)
-    G = modelling.dcgan.Generator(img_size=img_size, z_dim=args.z_dim)
+    D = dcgan.Discriminator(img_size=img_size)
+    G = dcgan.Generator(img_size=img_size, z_dim=args.z_dim)
     print(D)
     print(G)
 

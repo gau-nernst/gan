@@ -1,65 +1,56 @@
-import einops
+import datetime
+
 import pytorch_lightning as pl
+import torch
+import torchvision.datasets as TD
 import torchvision.transforms as TT
+from pytorch_lightning.loggers import TensorBoardLogger
+from pytorch_lightning.utilities.argparse import add_argparse_args
 from torch import nn
 from torch.utils.data import DataLoader
-from torchvision.datasets import MNIST
 
-from modelling import init_module, make_layers
-from training import GANSystem
-from utils import _Act, _Norm, get_parser
-
-
-class Discriminator(nn.Sequential):
-    def __init__(self, norm: _Norm = nn.BatchNorm2d, act: _Act = nn.ReLU):
-        super().__init__()
-        kwargs = dict(kernel_size=3, padding=1, norm=norm, act=act)
-        layer_configs = [[32], [64], [128], [256]]
-        self.convs = nn.Sequential(*make_layers(1, layer_configs, **kwargs))
-        self.pool = nn.AdaptiveAvgPool2d((1, 1))
-        self.flatten = nn.Flatten()
-
-
-class Generator(nn.Module):
-    def __init__(self, z_dim, norm: _Norm = nn.BatchNorm2d, act: _Act = nn.ReLU):
-        super().__init__()
-        self.z_dim = z_dim
-        self.linear = nn.Linear(z_dim, 512 * 2 * 2)
-        kwargs = dict(kernel_size=4, stride=2, padding=1, conv=nn.ConvTranspose2d, norm=norm, act=act)
-        layer_configs = [[256], [128], [64], [32]]
-        self.layers = nn.Sequential(
-            *make_layers(512, layer_configs, **kwargs),
-            nn.Conv2d(32, 1, 3, stride=1, padding=1),
-            nn.Tanh(),
-        )
-
-    def forward(self, x):
-        x = einops.rearrange(self.linear(x), "b (c h w) -> b c h w", h=2, w=2)
-        return self.layers(x)
+from modelling import dcgan
+from training import GANSystem, ImageLoggingCallback
+from utils import get_parser
 
 
 def main():
     parser = get_parser()
+    parser = add_argparse_args(GANSystem, parser)
     parser = pl.Trainer.add_argparse_args(parser)
     args = parser.parse_args()
 
+    print("Arguments")
+    for k, v in vars(args).items():
+        print(f"  {k}: {v}")
+
+    # pad from 28x28 to 32x32
     transform = TT.Compose([TT.Pad(2), TT.ToTensor(), TT.Normalize(0.5, 0.5)])
-    ds = MNIST("data", transform=transform)
-    dloader = DataLoader(ds, batch_size=args.batch_size, shuffle=True, num_workers=8)
-
-    D = Discriminator()
-    init_module(D, "relu")
-
-    G = Generator(args.z_dim)
-    init_module(G, "relu")
-
-    gan = GANSystem(
-        discriminator=D,
-        generator=G,
-        z_dim=args.z_dim,
-        method=args.method,
-        log_img_interval=args.log_interval,
+    ds = TD.MNIST("data", transform=transform)
+    dloader = DataLoader(
+        dataset=ds,
+        batch_size=args.batch_size,
+        shuffle=True,
+        num_workers=8,
+        pin_memory=True,
+        persistent_workers=True,
     )
+
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    args.logger = TensorBoardLogger("logs", name=args.log_name, version=timestamp)
+
+    fixed_noise = torch.randn((30, args.z_dim))
+    fixed_y = torch.arange(10).repeat_interleave(3)
+    args.callbacks = [ImageLoggingCallback(1000, fixed_noise, fixed_y)]
+
+    D = dcgan.Discriminator(32, 1, [64, 128, 256], c_dim=32)
+    G = dcgan.Generator(32, 1, args.z_dim, [256, 128, 64], c_dim=32)
+    condition_encoder = nn.Embedding(10, 32)
+    nn.init.normal_(condition_encoder.weight, 0, 0.02)
+    print(D)
+    print(G)
+
+    gan = GANSystem(D, G, condition_encoder=condition_encoder, **vars(args))
     trainer = pl.Trainer.from_argparse_args(args)
     trainer.fit(gan, dloader)
 
