@@ -23,3 +23,4 @@ Some lessons I have learned from implementing and training GANs:
 - To enforce 1-L continuity for Discriminator in WGAN, weight clipping may make Discriminator collapse `D(x) = D(G(z))`. Gradient penalty (WGAN-GP) is not working for me.
 - GAN training depends on random seed. Sometimes I can get better (or worse) results by repeating the same training.
 - Optimizers: Early GANs use Adam with `beta1=0.5`. WGAN uses RMSprop. I haven't experimented with other optimizers. SGD probably won't be able to optimize the minimax game. GANs also don't use weight decay.
+- Provide label information helps with GAN training. I didn't try modifying Discriminator to classify all classes + fake (suggested by [(Salimans, 2016)](https://proceedings.neurips.cc/paper/2016/hash/8a3363abe792db2d8761d6403605aeb7-Abstract.html)), but Conditional GAN seems to speed up convergence. Conditional GAN probably prevents mode collapse also.

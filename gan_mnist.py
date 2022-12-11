@@ -40,29 +40,19 @@ def main():
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     args.logger = TensorBoardLogger("logs", name=args.log_name, version=timestamp)
 
-    fixed_noise = torch.randn((30, args.z_dim))
-    fixed_y = torch.arange(10).repeat_interleave(3)
+    fixed_noise = torch.randn((40, args.z_dim))
+    fixed_y = torch.arange(10).repeat_interleave(4)
     args.callbacks = [ImageLoggingCallback(1000, fixed_noise, fixed_y)]
 
-    condition_dim = 32
-    condition_encoder = nn.Embedding(10, condition_dim)
-    nn.init.normal_(condition_encoder.weight, 0, 0.02)
+    kwargs = dict(img_size=32, img_depth=1)
+    if args.conditional:
+        condition_dim = 32
+        condition_encoder = nn.Embedding(10, condition_dim)
+        nn.init.normal_(condition_encoder.weight, 0, 0.02)
+        kwargs.update(c_dim=condition_dim, c_encoder=condition_encoder)
 
-    D = dcgan.Discriminator(
-        img_size=32,
-        img_depth=1,
-        depth_list=[64, 128, 256],
-        c_encoder=condition_encoder,
-        c_dim=condition_dim,
-    )
-    G = dcgan.Generator(
-        img_size=32,
-        img_depth=1,
-        z_dim=args.z_dim,
-        depth_list=[256, 128, 64],
-        c_encoder=deepcopy(condition_encoder),
-        c_dim=condition_dim,
-    )
+    D = dcgan.Discriminator(depth_list=[64, 128, 256], **kwargs)
+    G = dcgan.Generator(z_dim=args.z_dim, depth_list=[256, 128, 64], **kwargs)
     print(D)
     print(G)
 
