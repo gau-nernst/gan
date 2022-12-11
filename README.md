@@ -21,3 +21,5 @@ Some lessons I have learned from implementing and training GANs:
   - For Generator, Batch norm should be in training mode during training, even when it generates samples for training Discriminator. During inference, if the batch size is large, Batch norm can be in training mode also. Generating single image (batch size 1) might be problematic.
   - I haven't explored other norm layers e.g. Layer norm, Instance norm, Adaptive Instance norm.
 - To enforce 1-L continuity for Discriminator in WGAN, weight clipping may make Discriminator collapse `D(x) = D(G(z))`. Gradient penalty (WGAN-GP) is not working for me.
+- GAN training depends on random seed. Sometimes I can get better (or worse) results by repeating the same training.
+- Optimizers: Early GANs use Adam with `beta1=0.5`. WGAN uses RMSprop. I haven't experimented with other optimizers. SGD probably won't be able to optimize the minimax game. GANs also don't use weight decay.
