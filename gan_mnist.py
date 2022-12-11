@@ -1,4 +1,5 @@
 import datetime
+from copy import deepcopy
 
 import pytorch_lightning as pl
 import torch
@@ -43,14 +44,29 @@ def main():
     fixed_y = torch.arange(10).repeat_interleave(3)
     args.callbacks = [ImageLoggingCallback(1000, fixed_noise, fixed_y)]
 
-    D = dcgan.Discriminator(32, 1, [64, 128, 256], c_dim=32)
-    G = dcgan.Generator(32, 1, args.z_dim, [256, 128, 64], c_dim=32)
-    condition_encoder = nn.Embedding(10, 32)
+    condition_dim = 32
+    condition_encoder = nn.Embedding(10, condition_dim)
     nn.init.normal_(condition_encoder.weight, 0, 0.02)
+
+    D = dcgan.Discriminator(
+        img_size=32,
+        img_depth=1,
+        depth_list=[64, 128, 256],
+        c_encoder=condition_encoder,
+        c_dim=condition_dim,
+    )
+    G = dcgan.Generator(
+        img_size=32,
+        img_depth=1,
+        z_dim=args.z_dim,
+        depth_list=[256, 128, 64],
+        c_encoder=deepcopy(condition_encoder),
+        c_dim=condition_dim,
+    )
     print(D)
     print(G)
 
-    gan = GANSystem(D, G, condition_encoder=condition_encoder, **vars(args))
+    gan = GANSystem(D, G, **vars(args))
     trainer = pl.Trainer.from_argparse_args(args)
     trainer.fit(gan, dloader)
 
