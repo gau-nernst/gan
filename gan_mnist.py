@@ -44,15 +44,16 @@ def main():
     fixed_y = torch.arange(10).repeat_interleave(4)
     args.callbacks = [ImageLoggingCallback(1000, fixed_noise, fixed_y)]
 
-    kwargs = dict(img_size=32, img_depth=1)
+    d_kwargs = dict(img_size=32, img_depth=1)
     if args.conditional:
         condition_dim = 32
         condition_encoder = nn.Embedding(10, condition_dim)
         nn.init.normal_(condition_encoder.weight, 0, 0.02)
-        kwargs.update(c_dim=condition_dim, c_encoder=condition_encoder)
+        d_kwargs.update(c_dim=condition_dim, c_encoder=condition_encoder)
+    g_kwargs = deepcopy(d_kwargs)
 
-    D = dcgan.Discriminator(depth_list=[64, 128, 256], **kwargs)
-    G = dcgan.Generator(z_dim=args.z_dim, depth_list=[256, 128, 64], **kwargs)
+    D = dcgan.Discriminator(depth_list=[64, 128, 256], **d_kwargs)
+    G = dcgan.Generator(z_dim=args.z_dim, depth_list=[256, 128, 64], **g_kwargs)
     print(D)
     print(G)
 
