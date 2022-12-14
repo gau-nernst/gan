@@ -52,8 +52,8 @@ def main():
         d_kwargs.update(c_dim=condition_dim, c_encoder=condition_encoder)
     g_kwargs = deepcopy(d_kwargs)
 
-    D = dcgan.Discriminator(depth_list=[64, 128, 256], **d_kwargs)
-    G = dcgan.Generator(z_dim=args.z_dim, depth_list=[256, 128, 64], **g_kwargs)
+    D = dcgan.Discriminator(**d_kwargs)
+    G = dcgan.Generator(z_dim=args.z_dim, **g_kwargs)
     print(D)
     print(G)
 

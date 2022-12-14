@@ -1,8 +1,17 @@
+# DCGAN - https://arxiv.org/abs/1701.07875
+# Discriminator will downsample until the feature map is 4x4, then flatten and matmul
+# Generator will matmul, reshape to 4x4, then upsample until the desired image size is obtained
+#
+# Code references:
+# https://github.com/soumith/dcgan.torch/
+# https://github.com/martinarjovsky/WassersteinGAN/
+
+import math
 from functools import partial
-from typing import Optional, List
+from typing import Optional
 
 import torch
-from torch import nn, Tensor
+from torch import Tensor, nn
 
 from .base import _Act, _Norm, conv_norm_act
 
@@ -12,26 +21,33 @@ class Discriminator(nn.Module):
         self,
         img_size: int = 64,
         img_depth: int = 3,
-        depth_list: Optional[List[int]] = None,
+        smallest_map_size: int = 4,
+        base_depth: int = 64,
         norm: _Norm = nn.BatchNorm2d,
         act: _Act = partial(nn.LeakyReLU, 0.2, True),
         c_encoder: Optional[nn.Module] = None,
         c_dim: int = 0,
     ):
+        assert img_size >= 4 and math.log2(img_size).is_integer()
+        assert math.log2(smallest_map_size).is_integer()
         if c_encoder is not None:
             assert c_dim > 0
             img_depth += c_dim
         super().__init__()
         kwargs = dict(kernel_size=4, stride=2, padding=1, norm=norm, act=act)
-        depth_list = depth_list or [64, 128, 256, 512]
-        last_feat_map_size = img_size // 2 ** len(depth_list)
 
         self.c_encoder = c_encoder
         self.convs = nn.Sequential()
-        for depth in depth_list:
-            self.convs.append(conv_norm_act(img_depth, depth, **kwargs))
-            img_depth = depth
-        self.convs.append(nn.Conv2d(img_depth, 1, last_feat_map_size))
+
+        # add strided conv until image size = 4
+        while img_size > smallest_map_size:
+            self.convs.append(conv_norm_act(img_depth, base_depth, **kwargs))
+            img_depth = base_depth
+            base_depth *= 2
+            img_size /= 2
+
+        # flatten and matmul
+        self.convs.append(nn.Conv2d(img_depth, 1, smallest_map_size))
 
         self.convs.apply(init_weights)
 
@@ -39,8 +55,7 @@ class Discriminator(nn.Module):
         if self.c_encoder is not None:
             assert ys is not None
             img_h, img_w = imgs.shape[2:]
-            y_embs = self.c_encoder(ys)
-            y_embs = y_embs[:, :, None, None].expand(-1, -1, img_h, img_w)
+            y_embs = self.c_encoder(ys)[:, :, None, None].expand(-1, -1, img_h, img_w)
             imgs = torch.cat([imgs, y_embs], dim=1)
         return self.convs(imgs)
 
@@ -51,30 +66,38 @@ class Generator(nn.Module):
         img_size: int = 64,
         img_depth: int = 3,
         z_dim: int = 128,
-        depth_list: Optional[List[int]] = None,
+        smallest_map_size: int = 4,
+        base_depth: int = 64,
         norm: _Norm = nn.BatchNorm2d,
         act: _Act = partial(nn.ReLU, True),
         c_encoder: Optional[nn.Module] = None,
         c_dim: int = 0,
     ):
+        assert img_size >= 4 and math.log2(img_size).is_integer()
+        assert math.log2(smallest_map_size).is_integer()
         if c_encoder is not None:
             assert c_dim >= 0
             z_dim += c_dim
         super().__init__()
         kwargs = dict(conv=nn.ConvTranspose2d, norm=norm, act=act)
-        depth_list = depth_list or [512, 256, 128, 64]
-        first_feat_map_size = img_size // 2 ** len(depth_list)
 
         self.c_encoder = c_encoder
         self.convs = nn.Sequential()
-        self.convs.append(conv_norm_act(z_dim, depth_list[0], first_feat_map_size, **kwargs))
-        in_depth = depth_list[0]
+
+        # matmul and reshape to 4x4
+        depth = base_depth * img_size // 2 // smallest_map_size
+        self.convs.append(conv_norm_act(z_dim, depth, smallest_map_size, **kwargs))
+
+        # conv transpose until reaching image size / 2
         kwargs.update(kernel_size=4, stride=2, padding=1)
-        for depth in depth_list[1:]:
-            self.convs.append(conv_norm_act(in_depth, depth, **kwargs))
-            in_depth = depth
+        while smallest_map_size < img_size // 2:
+            self.convs.append(conv_norm_act(depth, depth // 2, **kwargs))
+            depth //= 2
+            smallest_map_size *= 2
+
+        # last layer use tanh activation
         kwargs.update(norm=None, act=nn.Tanh)
-        self.convs.append(conv_norm_act(in_depth, img_depth, **kwargs))
+        self.convs.append(conv_norm_act(depth, img_depth, **kwargs))
 
         self.convs.apply(init_weights)
 
@@ -86,8 +109,6 @@ class Generator(nn.Module):
         return self.convs(z_embs[:, :, None, None])
 
 
-# https://github.com/soumith/dcgan.torch/blob/master/main.lua#L42
-# https://github.com/martinarjovsky/WassersteinGAN/blob/master/main.py#L108
 def init_weights(module: nn.Module):
     if isinstance(module, nn.modules.conv._ConvNd):
         nn.init.normal_(module.weight, 0, 0.02)
