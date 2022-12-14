@@ -1,4 +1,5 @@
 from typing import Callable, Optional
+from functools import partial
 
 from torch import nn
 
@@ -14,7 +15,7 @@ def conv_norm_act(
     padding: int = 0,
     conv: Callable[..., nn.Module] = nn.Conv2d,
     norm: Optional[_Norm] = nn.BatchNorm2d,
-    act: Optional[_Act] = nn.ReLU,
+    act: Optional[_Act] = partial(nn.ReLU, inplace=True),
 ):
     return nn.Sequential(
         conv(in_dim, out_dim, kernel_size, stride, padding, bias=norm is None),
