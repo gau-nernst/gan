@@ -34,22 +34,23 @@ class Discriminator(nn.Module):
             assert c_dim > 0
             img_depth += c_dim
         super().__init__()
-        kwargs = dict(kernel_size=4, stride=2, padding=1, norm=norm, act=act)
+        layer = partial(conv_norm_act, kernel_size=4, stride=2, padding=1, norm=norm, act=act)
 
         self.c_encoder = c_encoder
-        self.convs = nn.Sequential()
+        self.layers = nn.Sequential()
+        self.layers.append(layer(img_depth, base_depth))
+        img_size /= 2
 
         # add strided conv until image size = 4
         while img_size > smallest_map_size:
-            self.convs.append(conv_norm_act(img_depth, base_depth, **kwargs))
-            img_depth = base_depth
+            self.layers.append(layer(base_depth, base_depth * 2))
             base_depth *= 2
-            img_size /= 2
+            img_size //= 2
 
         # flatten and matmul
-        self.convs.append(nn.Conv2d(img_depth, 1, smallest_map_size))
+        self.layers.append(nn.Conv2d(img_depth, 1, smallest_map_size))
 
-        self.convs.apply(init_weights)
+        self.layers.apply(init_weights)
 
     def forward(self, imgs: Tensor, ys: Optional[Tensor] = None):
         if self.c_encoder is not None:
@@ -57,7 +58,7 @@ class Discriminator(nn.Module):
             img_h, img_w = imgs.shape[2:]
             y_embs = self.c_encoder(ys)[:, :, None, None].expand(-1, -1, img_h, img_w)
             imgs = torch.cat([imgs, y_embs], dim=1)
-        return self.convs(imgs)
+        return self.layers(imgs)
 
 
 class Generator(nn.Module):
@@ -82,31 +83,31 @@ class Generator(nn.Module):
         kwargs = dict(conv=nn.ConvTranspose2d, norm=norm, act=act)
 
         self.c_encoder = c_encoder
-        self.convs = nn.Sequential()
+        self.layers = nn.Sequential()
 
         # matmul and reshape to 4x4
         depth = base_depth * img_size // 2 // smallest_map_size
-        self.convs.append(conv_norm_act(z_dim, depth, smallest_map_size, **kwargs))
+        self.layers.append(conv_norm_act(z_dim, depth, smallest_map_size, **kwargs))
 
         # conv transpose until reaching image size / 2
         kwargs.update(kernel_size=4, stride=2, padding=1)
         while smallest_map_size < img_size // 2:
-            self.convs.append(conv_norm_act(depth, depth // 2, **kwargs))
+            self.layers.append(conv_norm_act(depth, depth // 2, **kwargs))
             depth //= 2
             smallest_map_size *= 2
 
         # last layer use tanh activation
         kwargs.update(norm=None, act=nn.Tanh)
-        self.convs.append(conv_norm_act(depth, img_depth, **kwargs))
+        self.layers.append(conv_norm_act(depth, img_depth, **kwargs))
 
-        self.convs.apply(init_weights)
+        self.layers.apply(init_weights)
 
     def forward(self, z_embs: Tensor, ys: Optional[Tensor] = None):
         if self.c_encoder is not None:
             assert ys is not None
             y_embs = self.c_encoder(ys)
             z_embs = torch.cat([z_embs, y_embs], dim=1)
-        return self.convs(z_embs[:, :, None, None])
+        return self.layers(z_embs[:, :, None, None])
 
 
 def init_weights(module: nn.Module):
