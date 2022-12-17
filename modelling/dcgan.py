@@ -48,7 +48,7 @@ class Discriminator(nn.Module):
             img_size //= 2
 
         # flatten and matmul
-        self.layers.append(nn.Conv2d(img_depth, 1, smallest_map_size))
+        self.layers.append(nn.Conv2d(base_depth, 1, smallest_map_size))
 
         self.layers.apply(init_weights)
 
