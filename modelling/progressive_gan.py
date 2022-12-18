@@ -1,9 +1,12 @@
 # Progressive GAN - https://arxiv.org/pdf/1710.10196
 # See Table 2 for detailed model architecture
+# upscale2d_conv2d is replaced with conv transpose kernel_size=4
+# Not implemented features
+# - BlurPool (https://arxiv.org/abs/1904.11486): helps to reduce anti-aliasing
+# - Progressive growing and Equalized learning rate
 #
 # Code reference:
 # https://github.com/tkarras/progressive_growing_of_gans
-
 
 import math
 from functools import partial
@@ -11,8 +14,9 @@ from typing import Optional
 
 import torch
 from torch import Tensor, nn
+import torch.nn.functional as F
 
-from .base import _Act, conv_norm_act
+from .base import _Act, conv_act_norm, _Norm, PixelNorm
 
 
 class MinibatchStdDev(nn.Module):
@@ -40,8 +44,8 @@ class Discriminator(nn.Module):
         assert img_size > 4 and math.log2(img_size).is_integer()
         super().__init__()
         kwargs = dict(norm=None, act=act)
-        conv3x3 = partial(conv_norm_act, kernel_size=3, padding=1, **kwargs)
-        conv1x1 = partial(conv_norm_act, kernel_size=1, **kwargs)
+        conv3x3 = partial(conv_act_norm, kernel_size=3, padding=1, **kwargs)
+        conv1x1 = partial(conv_act_norm, kernel_size=1, **kwargs)
 
         self.layers = nn.Sequential()
         self.layers.append(conv1x1(img_depth, base_depth))
@@ -55,7 +59,7 @@ class Discriminator(nn.Module):
 
         self.layers.append(MinibatchStdDev())
         self.layers.append(conv3x3(base_depth + 1, base_depth))
-        self.layers.append(conv_norm_act(base_depth, base_depth, smallest_map_size, **kwargs))
+        self.layers.append(conv_act_norm(base_depth, base_depth, smallest_map_size, **kwargs))
         self.layers.append(conv1x1(base_depth, 1))
 
         self.layers.apply(init_weights)
@@ -73,20 +77,21 @@ class Generator(nn.Module):
         base_depth: int = 16,
         max_depth: int = 512,
         smallest_map_size: int = 4,
+        norm: Optional[_Norm] = PixelNorm,
         act: _Act = partial(nn.LeakyReLU, 0.2, True),
     ):
         assert img_size > 4 and math.log2(img_size).is_integer()
         super().__init__()
-        kwargs = dict(norm=None, act=act)
-        conv3x3 = partial(conv_norm_act, kernel_size=3, padding=1, **kwargs)
-        up_conv = partial(conv_norm_act, kernel_size=4, stride=2, padding=1, conv=nn.ConvTranspose2d, **kwargs)
+        kwargs = dict(norm=norm, act=act)
+        conv3x3 = partial(conv_act_norm, kernel_size=3, padding=1, **kwargs)
+        up_conv = partial(conv_act_norm, kernel_size=4, stride=2, padding=1, conv=nn.ConvTranspose2d, **kwargs)
 
         in_depth = z_dim
         depth = base_depth * img_size // smallest_map_size
         out_depth = min(depth, max_depth)
 
         self.layers = nn.Sequential()
-        self.layers.append(conv_norm_act(in_depth, out_depth, smallest_map_size, **kwargs))
+        self.layers.append(conv_act_norm(in_depth, out_depth, smallest_map_size, conv=nn.ConvTranspose2d, **kwargs))
         self.layers.append(conv3x3(out_depth, out_depth))
         in_depth = out_depth
         depth //= 2
@@ -104,7 +109,7 @@ class Generator(nn.Module):
         self.layers.apply(init_weights)
 
     def forward(self, z_embs: Tensor, ys: Optional[Tensor] = None):
-        return self.layers(z_embs[:, :, None, None])
+        return self.layers(F.normalize(z_embs)[:, :, None, None])
 
 
 def init_weights(module: nn.Module):

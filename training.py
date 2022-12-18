@@ -52,7 +52,18 @@ class GANSystem(pl.LightningModule):
             kwargs.update(betas=(self.hparams["beta1"], self.hparams["beta2"]))
 
         optim_d = optim_cls(self.discriminator.parameters(), **kwargs)
-        optim_g = optim_cls(self.generator.parameters(), **kwargs)
+
+        if hasattr(self.generator, "mapping_network"):  # stylegan
+            group1 = [p for name, p in self.generator.named_parameters() if not name.startswith("mapping_network.")]
+            group2 = self.generator.mapping_network.parameters()
+            param_groups = [
+                dict(params=group1),
+                dict(params=group2, lr=kwargs["lr"] / 100),
+            ]
+            optim_g = optim_cls(param_groups, **kwargs)
+        else:
+            optim_g = optim_cls(self.generator.parameters(), **kwargs)
+        
         return optim_d, optim_g
 
     def training_step(self, batch: Tuple[Tensor, Tensor], batch_idx: int):
@@ -79,7 +90,7 @@ class GANSystem(pl.LightningModule):
                 x_inters = (x_reals * alpha + x_fakes * (1 - alpha)).requires_grad_()
                 d_inters = self.discriminator(x_inters)
 
-                d_grad = torch.autograd.grad(d_inters, x_inters, torch.ones_like(d_inters), create_graph=True)[0]
+                d_grad, = torch.autograd.grad(d_inters, x_inters, torch.ones_like(d_inters), create_graph=True)
                 d_grad_norm = torch.linalg.vector_norm(d_grad, dim=(1, 2, 3))
                 loss_d = loss_d + self.hparams["lamb"] * ((d_grad_norm - 1) ** 2).mean()
 

@@ -1,7 +1,7 @@
 # StyleGAN - https://arxiv.org/abs/1812.04948
 # Not implemented features
-# - BlurConv (https://arxiv.org/abs/1904.11486): helps to reduce anti-aliasing
-# - Progressive growing and Equalized learning rate (https://arxiv.org/abs/1710.10196)
+# - BlurPool (https://arxiv.org/abs/1904.11486): helps to reduce anti-aliasing
+# - Progressive growing and Equalized learning rate
 #
 # Code reference:
 # https://github.com/NVlabs/stylegan
@@ -31,15 +31,15 @@ class GeneratorBlock(nn.Module):
         self.noise_weight = nn.Parameter(torch.empty(1, out_dim, 1, 1))  # B in paper
         self.act = act()
         self.norm = nn.InstanceNorm2d(out_dim)
-        self.style_linear = nn.Linear(w_dim, out_dim * 2)  # A in paper
+        self.style_map = nn.Linear(w_dim, out_dim * 2)  # A in paper
 
         if isinstance(self.conv, nn.modules.conv._ConvNd):
             nn.init.kaiming_normal_(self.conv.weight)
             nn.init.zeros_(self.conv.bias)
         nn.init.zeros_(self.noise_weight)
-        nn.init.kaiming_normal_(self.style_linear.weight)
-        nn.init.ones_(self.style_linear.bias[:out_dim])  # weight
-        nn.init.zeros_(self.style_linear.bias[out_dim:])  # bias
+        nn.init.kaiming_normal_(self.style_map.weight)
+        nn.init.ones_(self.style_map.bias[:out_dim])  # weight
+        nn.init.zeros_(self.style_map.bias[out_dim:])  # bias
 
     def forward(self, imgs: Tensor, w_embs: Tensor):
         imgs = self.conv(imgs)
@@ -48,7 +48,7 @@ class GeneratorBlock(nn.Module):
         noise = torch.randn(b, 1, h, w, device=imgs.device)
         imgs = self.act(imgs + noise * self.noise_weight)
 
-        style = self.style_linear(w_embs).view(b, -1, 1, 1)
+        style = self.style_map(w_embs).view(b, -1, 1, 1)
         return self.norm(imgs) * style[:, :c] + style[:, c:]
 
 
