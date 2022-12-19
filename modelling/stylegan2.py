@@ -1,6 +1,6 @@
 # StyleGAN - https://arxiv.org/abs/1812.04948
 # Not implemented features
-# - Progressive growing and Equalized learning rate (from Progressive GAN)
+# - Equalized learning rate (from Progressive GAN)
 #
 # Code reference:
 # https://github.com/NVlabs/stylegan
