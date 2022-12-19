@@ -35,7 +35,7 @@ class GeneratorBlock(nn.Module):
 
         self.weight = nn.Parameter(torch.empty(out_dim, in_dim, kernel_size, kernel_size))
         self.bias = nn.Parameter(torch.empty(1, out_dim, 1, 1))
-        self.noise_weight = nn.Parameter(torch.empty(1, out_dim, 1, 1))  # B in paper
+        self.noise_weight = nn.Parameter(torch.empty(1))  # B in paper
         self.style_map = nn.Linear(w_dim, in_dim)  # A in paper
         self.act = act() if act is not None else nn.Identity()
 
@@ -79,7 +79,7 @@ class Generator(nn.Module):
         z_dim: int = 512,
         w_dim: int = 512,
         mapping_network_depth: int = 8,
-        learned_input_depth: int = 512,
+        input_depth: int = 512,
         smallest_map_size: int = 4,
         base_depth: int = 16,
         max_depth: int = 512,
@@ -92,27 +92,26 @@ class Generator(nn.Module):
             self.mapping_network.append(nn.Linear(z_dim if i == 0 else w_dim, w_dim))
             self.mapping_network.append(act())
 
-        self.learned_input = nn.Parameter(torch.empty(1, learned_input_depth, smallest_map_size, smallest_map_size))
+        self.learned_input = nn.Parameter(torch.empty(1, input_depth, smallest_map_size, smallest_map_size))
         self.upsample_blur = nn.Sequential(nn.Upsample(scale_factor=2.0), Blur([1, 3, 3, 1]))
 
         block = partial(GeneratorBlock, w_dim=w_dim, kernel_size=3, act=act)
         to_rgb = partial(GeneratorBlock, out_dim=img_depth, w_dim=w_dim, kernel_size=1, demodulation=False, act=None)
-        in_depth = learned_input_depth
         depth = base_depth * img_size // smallest_map_size
         out_depth = min(depth, max_depth)
 
         self.layers = nn.ModuleList()
-        self.layers.append(block(in_depth, out_depth))
+        self.layers.append(block(input_depth, out_depth))
         self.layers.append(to_rgb(out_depth))
-        in_depth = out_depth
+        input_depth = out_depth
         depth //= 2
 
         while smallest_map_size < img_size:
             out_depth = min(depth, max_depth)
-            self.layers.append(block(in_depth, out_depth, upsample=True))
+            self.layers.append(block(input_depth, out_depth, upsample=True))
             self.layers.append(block(out_depth, out_depth))
             self.layers.append(to_rgb(out_depth))
-            in_depth = out_depth
+            input_depth = out_depth
             depth //= 2
             smallest_map_size *= 2
 

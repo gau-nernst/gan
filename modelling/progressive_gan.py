@@ -40,10 +40,9 @@ class DiscriminatorStage(nn.Module):
     ):
         super().__init__()
         self.main = nn.Sequential(
-            conv_act_norm(in_dim, in_dim, 3, 1, 1, norm=None, act=act),
+            conv_act(in_dim, in_dim, 3, 1, 1, act=act),
             Blur(),  # BlurPool from StyleGAN onwards
-            # is downsample + conv better than strided conv?
-            conv_act_norm(in_dim, out_dim, 3, 2, 1, norm=None, act=act),
+            conv_act(in_dim, out_dim, 3, 2, 1, act=act),
         )
         self.skip = nn.Sequential(Blur(), nn.Conv2d(in_dim, out_dim, 1, 2)) if residual else None
 

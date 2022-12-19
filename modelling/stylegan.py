@@ -70,7 +70,7 @@ class Generator(nn.Module):
         z_dim: int = 512,
         w_dim: int = 512,
         mapping_network_depth: int = 8,
-        learned_input_depth: int = 512,
+        input_depth: int = 512,
         smallest_map_size: int = 4,
         base_depth: int = 16,
         max_depth: int = 512,
@@ -83,28 +83,27 @@ class Generator(nn.Module):
             self.mapping_network.append(nn.Linear(z_dim if i == 0 else w_dim, w_dim))
             self.mapping_network.append(act())
 
-        self.learned_input = nn.Parameter(torch.empty(1, learned_input_depth, smallest_map_size, smallest_map_size))
+        self.learned_input = nn.Parameter(torch.empty(1, input_depth, smallest_map_size, smallest_map_size))
 
         block = partial(GeneratorBlock, w_dim=w_dim, act=act)
-        in_depth = learned_input_depth
         depth = base_depth * img_size // smallest_map_size
         out_depth = min(depth, max_depth)
 
         self.layers = nn.ModuleList()
-        self.layers.append(block(in_depth, in_depth, first_block=True))
-        self.layers.append(block(in_depth, out_depth))
-        in_depth = out_depth
+        self.layers.append(block(input_depth, input_depth, first_block=True))
+        self.layers.append(block(input_depth, out_depth))
+        input_depth = out_depth
         depth //= 2
 
         while smallest_map_size < img_size:
             out_depth = min(depth, max_depth)
-            self.layers.append(block(in_depth, out_depth, upsample=True))
+            self.layers.append(block(input_depth, out_depth, upsample=True))
             self.layers.append(block(out_depth, out_depth))
-            in_depth = out_depth
+            input_depth = out_depth
             depth //= 2
             smallest_map_size *= 2
 
-        self.out_conv = nn.Conv2d(in_depth, img_depth, 1)
+        self.out_conv = nn.Conv2d(input_depth, img_depth, 1)
 
         nn.init.ones_(self.learned_input)
 
