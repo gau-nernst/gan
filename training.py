@@ -8,6 +8,14 @@ from pytorch_lightning.loggers import TensorBoardLogger, WandbLogger
 from torch import Tensor, nn
 
 
+def apply_spectral_normalization(module: nn.Module):
+    for name, child in module.named_children():
+        if isinstance(child, (nn.modules.conv._ConvNd, nn.Linear)):
+            setattr(module, name, nn.utils.parametrizations.spectral_norm(child))
+        else:
+            apply_spectral_normalization(child)
+
+
 class GANSystem(pl.LightningModule):
     def __init__(
         self,
@@ -15,6 +23,8 @@ class GANSystem(pl.LightningModule):
         generator: nn.Module,
         z_dim: int = 128,
         method: str = "gan",
+        spectral_norm_d: bool = False,
+        spectral_norm_g: bool = False,
         label_smoothing: float = 0.0,
         clip: float = 0.01,
         lamb: float = 10.0,
@@ -26,10 +36,14 @@ class GANSystem(pl.LightningModule):
         beta2: float = 0.999,
         **kwargs,
     ):
-        assert method in ("gan", "wgan", "wgan-gp")
+        assert method in ("gan", "wgan", "wgan-gp", "hinge")
         assert optimizer in ("SGD", "Adam", "AdamW", "RMSprop")
         assert clip > 0
         super().__init__()
+        if spectral_norm_d:
+            apply_spectral_normalization(discriminator)
+        if spectral_norm_g:
+            apply_spectral_normalization(generator)
         self.discriminator = discriminator
         self.generator = generator
         self.save_hyperparameters(ignore=["discriminator", "generator", "condition_encoder"])
@@ -63,7 +77,7 @@ class GANSystem(pl.LightningModule):
             optim_g = optim_cls(param_groups, **kwargs)
         else:
             optim_g = optim_cls(self.generator.parameters(), **kwargs)
-        
+
         return optim_d, optim_g
 
     def training_step(self, batch: Tuple[Tensor, Tensor], batch_idx: int):
@@ -90,9 +104,12 @@ class GANSystem(pl.LightningModule):
                 x_inters = (x_reals * alpha + x_fakes * (1 - alpha)).requires_grad_()
                 d_inters = self.discriminator(x_inters)
 
-                d_grad, = torch.autograd.grad(d_inters, x_inters, torch.ones_like(d_inters), create_graph=True)
+                (d_grad,) = torch.autograd.grad(d_inters, x_inters, torch.ones_like(d_inters), create_graph=True)
                 d_grad_norm = torch.linalg.vector_norm(d_grad, dim=(1, 2, 3))
                 loss_d = loss_d + self.hparams["lamb"] * ((d_grad_norm - 1) ** 2).mean()
+
+        elif method == "hinge":
+            loss_d = F.relu(1 - d_reals).mean() + F.relu(1 + d_fakes).mean()
 
         else:
             raise ValueError
@@ -117,7 +134,7 @@ class GANSystem(pl.LightningModule):
             if method == "gan":
                 loss_g = -F.logsigmoid(d_fakes).mean()
 
-            elif method in ("wgan", "wgan-gp"):
+            elif method in ("wgan", "wgan-gp", "hinge"):
                 loss_g = -d_fakes.mean()
 
             else:

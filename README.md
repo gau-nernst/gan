@@ -5,7 +5,8 @@ Features:
 - GAN losses and regularizations
   - Original GAN loss (non-saturating version)
   - WGAN and WGAN-GP
-  - TODO: SN-GAN, Hinge loss
+  - SN-GAN
+  - Hinge loss
 - Architectures
   - DCGAN
   - NVIDIA GANs (WIP): Progressive GAN, StyleGAN, StyleGAN2
