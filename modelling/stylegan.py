@@ -1,19 +1,18 @@
 # StyleGAN - https://arxiv.org/abs/1812.04948
 # Not implemented features
-# - BlurPool (https://arxiv.org/abs/1904.11486): helps to reduce anti-aliasing
-# - Progressive growing and Equalized learning rate
+# - Progressive growing and Equalized learning rate (from Progressive GAN)
 #
 # Code reference:
 # https://github.com/NVlabs/stylegan
 
 import math
 from functools import partial
-from typing import Callable, Optional
+from typing import Optional
 
 import torch
 from torch import Tensor, nn
 
-from .base import _Act
+from .base import Blur, _Act
 from .progressive_gan import Discriminator
 
 
@@ -23,29 +22,40 @@ class GeneratorBlock(nn.Module):
         in_dim: int,
         out_dim: int,
         w_dim: int,
-        conv: Optional[Callable[..., nn.Module]],
-        act: _Act,
+        act: _Act = partial(nn.LeakyReLU, 0.2, True),
+        first_block: bool = False,
+        upsample: bool = False,
     ):
         super().__init__()
-        self.conv = conv(in_dim, out_dim)
+        if first_block:
+            self.conv = nn.Identity()
+        elif upsample:
+            self.conv = nn.Sequential(
+                nn.Upsample(scale_factor=2.0),
+                nn.Conv2d(in_dim, out_dim, 3, 1, 1),
+                Blur([1, 2, 1]),
+            )
+        else:
+            self.conv = nn.Conv2d(in_dim, out_dim, 3, 1, 1)
         self.noise_weight = nn.Parameter(torch.empty(1, out_dim, 1, 1))  # B in paper
         self.act = act()
         self.norm = nn.InstanceNorm2d(out_dim)
         self.style_map = nn.Linear(w_dim, out_dim * 2)  # A in paper
 
-        if isinstance(self.conv, nn.modules.conv._ConvNd):
-            nn.init.kaiming_normal_(self.conv.weight)
-            nn.init.zeros_(self.conv.bias)
+        for m in self.modules():
+            if isinstance(m, nn.modules.conv._ConvNd):
+                nn.init.kaiming_normal_(m.weight)
+                nn.init.zeros_(m.bias)
         nn.init.zeros_(self.noise_weight)
         nn.init.kaiming_normal_(self.style_map.weight)
         nn.init.ones_(self.style_map.bias[:out_dim])  # weight
         nn.init.zeros_(self.style_map.bias[out_dim:])  # bias
 
-    def forward(self, imgs: Tensor, w_embs: Tensor):
+    def forward(self, imgs: Tensor, w_embs: Tensor, noise: Optional[Tensor] = None):
         imgs = self.conv(imgs)
         b, c, h, w = imgs.shape
 
-        noise = torch.randn(b, 1, h, w, device=imgs.device)
+        noise = noise or torch.randn(b, 1, h, w, device=imgs.device)
         imgs = self.act(imgs + noise * self.noise_weight)
 
         style = self.style_map(w_embs).view(b, -1, 1, 1)
@@ -75,23 +85,21 @@ class Generator(nn.Module):
 
         self.learned_input = nn.Parameter(torch.empty(1, learned_input_depth, smallest_map_size, smallest_map_size))
 
-        conv3x3 = partial(nn.Conv2d, kernel_size=3, padding=1)
-        up_conv = partial(nn.ConvTranspose2d, kernel_size=4, stride=2, padding=1)
         block = partial(GeneratorBlock, w_dim=w_dim, act=act)
         in_depth = learned_input_depth
         depth = base_depth * img_size // smallest_map_size
         out_depth = min(depth, max_depth)
 
         self.layers = nn.ModuleList()
-        self.layers.append(block(in_depth, in_depth, conv=nn.Identity))
-        self.layers.append(block(in_depth, out_depth, conv=conv3x3))
+        self.layers.append(block(in_depth, in_depth, first_block=True))
+        self.layers.append(block(in_depth, out_depth))
         in_depth = out_depth
         depth //= 2
 
         while smallest_map_size < img_size:
             out_depth = min(depth, max_depth)
-            self.layers.append(block(in_depth, out_depth, conv=up_conv))
-            self.layers.append(block(out_depth, out_depth, conv=conv3x3))
+            self.layers.append(block(in_depth, out_depth, upsample=True))
+            self.layers.append(block(out_depth, out_depth))
             in_depth = out_depth
             depth //= 2
             smallest_map_size *= 2

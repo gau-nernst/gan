@@ -1,8 +1,7 @@
 # Progressive GAN - https://arxiv.org/pdf/1710.10196
 # See Table 2 for detailed model architecture
-# upscale2d_conv2d is replaced with conv transpose kernel_size=4
+# Discriminator includes blurring (introduced in StyleGAN) and supports skip-connections (used in StyleGAN2)
 # Not implemented features
-# - BlurPool (https://arxiv.org/abs/1904.11486): helps to reduce anti-aliasing
 # - Progressive growing and Equalized learning rate
 #
 # Code reference:
@@ -13,10 +12,10 @@ from functools import partial
 from typing import Optional
 
 import torch
-from torch import Tensor, nn
 import torch.nn.functional as F
+from torch import Tensor, nn
 
-from .base import _Act, conv_act_norm, _Norm, PixelNorm
+from .base import Blur, PixelNorm, _Act, _Norm, conv_act, conv_act_norm
 
 
 class MinibatchStdDev(nn.Module):
@@ -31,6 +30,30 @@ class MinibatchStdDev(nn.Module):
         return torch.cat([imgs, std], dim=1)
 
 
+class DiscriminatorStage(nn.Module):
+    def __init__(
+        self,
+        in_dim: int,
+        out_dim: int,
+        act: _Act = partial(nn.LeakyReLU, 0.2, True),
+        residual: bool = False,
+    ):
+        super().__init__()
+        self.main = nn.Sequential(
+            conv_act_norm(in_dim, in_dim, 3, 1, 1, norm=None, act=act),
+            Blur(),  # BlurPool from StyleGAN onwards
+            # is downsample + conv better than strided conv?
+            conv_act_norm(in_dim, out_dim, 3, 2, 1, norm=None, act=act),
+        )
+        self.skip = nn.Sequential(Blur(), nn.Conv2d(in_dim, out_dim, 1, 2)) if residual else None
+
+    def forward(self, imgs: Tensor):
+        out = self.main(imgs)
+        if self.skip is not None:  # for StyleGAN2
+            out = (out + self.skip(imgs)) * 2 ** (-0.5)
+        return out
+
+
 class Discriminator(nn.Module):
     def __init__(
         self,
@@ -40,27 +63,25 @@ class Discriminator(nn.Module):
         max_depth: int = 512,
         smallest_map_size: int = 4,
         act: _Act = partial(nn.LeakyReLU, 0.2, True),
+        residual: bool = False,
     ):
         assert img_size > 4 and math.log2(img_size).is_integer()
         super().__init__()
-        kwargs = dict(norm=None, act=act)
-        conv3x3 = partial(conv_act_norm, kernel_size=3, padding=1, **kwargs)
-        conv1x1 = partial(conv_act_norm, kernel_size=1, **kwargs)
+        stage = partial(DiscriminatorStage, act=act, residual=residual)
 
         self.layers = nn.Sequential()
-        self.layers.append(conv1x1(img_depth, base_depth))
+        self.layers.append(conv_act(img_depth, base_depth, 1, act=act))
 
         while img_size > smallest_map_size:
             out_depth = min(base_depth * 2, max_depth)
-            self.layers.append(conv3x3(base_depth, base_depth))
-            self.layers.append(conv3x3(base_depth, out_depth, stride=2))
+            self.layers.append(stage(base_depth, out_depth))
             base_depth = out_depth
             img_size //= 2
 
         self.layers.append(MinibatchStdDev())
-        self.layers.append(conv3x3(base_depth + 1, base_depth))
-        self.layers.append(conv_act_norm(base_depth, base_depth, smallest_map_size, **kwargs))
-        self.layers.append(conv1x1(base_depth, 1))
+        self.layers.append(conv_act(base_depth + 1, base_depth, 3, 1, 1, act=act))
+        self.layers.append(conv_act(base_depth, base_depth, smallest_map_size, act=act))
+        self.layers.append(conv_act(base_depth, 1, 1, act=act))
 
         self.layers.apply(init_weights)
 
@@ -84,7 +105,6 @@ class Generator(nn.Module):
         super().__init__()
         kwargs = dict(norm=norm, act=act)
         conv3x3 = partial(conv_act_norm, kernel_size=3, padding=1, **kwargs)
-        up_conv = partial(conv_act_norm, kernel_size=4, stride=2, padding=1, conv=nn.ConvTranspose2d, **kwargs)
 
         in_depth = z_dim
         depth = base_depth * img_size // smallest_map_size
@@ -98,7 +118,9 @@ class Generator(nn.Module):
 
         while smallest_map_size < img_size:
             out_depth = min(depth, max_depth)
-            self.layers.append(up_conv(in_depth, out_depth))
+            self.layers.append(nn.Upsample(scale_factor=2.0))
+            self.layers.append(conv3x3(in_depth, out_depth))
+            self.layers.append(Blur())
             self.layers.append(conv3x3(out_depth, out_depth))
             in_depth = out_depth
             depth //= 2
