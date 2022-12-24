@@ -15,7 +15,7 @@ import torch
 import torch.nn.functional as F
 from torch import Tensor, nn
 
-from .base import Blur, PixelNorm, _Act, _Norm, conv_act, conv_act_norm
+from .base import Blur, PixelNorm, _Act, _Norm, conv_norm_act
 
 
 class MinibatchStdDev(nn.Module):
@@ -39,17 +39,18 @@ class DiscriminatorStage(nn.Module):
         residual: bool = False,
     ):
         super().__init__()
+        conv3x3_act = partial(conv_norm_act, kernel_size=3, padding=1, order=["conv", "act"], act=act)
         self.main = nn.Sequential(
-            conv_act(in_dim, in_dim, 3, 1, 1, act=act),
+            conv3x3_act(in_dim, in_dim),
             Blur(),  # BlurPool from StyleGAN onwards
-            conv_act(in_dim, out_dim, 3, 2, 1, act=act),
+            conv3x3_act(in_dim, out_dim, stride=2),
         )
-        self.skip = nn.Sequential(Blur(), nn.Conv2d(in_dim, out_dim, 1, 2)) if residual else None
+        self.shortcut = nn.Sequential(Blur(), nn.Conv2d(in_dim, out_dim, 1, 2)) if residual else None
 
     def forward(self, imgs: Tensor):
         out = self.main(imgs)
-        if self.skip is not None:  # for StyleGAN2
-            out = (out + self.skip(imgs)) * 2 ** (-0.5)
+        if self.shortcut is not None:  # for StyleGAN2
+            out = (out + self.shortcut(imgs)) * 2 ** (-0.5)
         return out
 
 
@@ -66,10 +67,11 @@ class Discriminator(nn.Module):
     ):
         assert img_size > 4 and math.log2(img_size).is_integer()
         super().__init__()
+        conv_act = partial(conv_norm_act, order=["conv", "act"], act=act)
         stage = partial(DiscriminatorStage, act=act, residual=residual)
 
         self.layers = nn.Sequential()
-        self.layers.append(conv_act(img_depth, base_depth, 1, act=act))
+        self.layers.append(conv_act(img_depth, base_depth, 1))
 
         while img_size > smallest_map_size:
             out_depth = min(base_depth * 2, max_depth)
@@ -78,9 +80,9 @@ class Discriminator(nn.Module):
             img_size //= 2
 
         self.layers.append(MinibatchStdDev())
-        self.layers.append(conv_act(base_depth + 1, base_depth, 3, 1, 1, act=act))
-        self.layers.append(conv_act(base_depth, base_depth, smallest_map_size, act=act))
-        self.layers.append(conv_act(base_depth, 1, 1, act=act))
+        self.layers.append(conv_act(base_depth + 1, base_depth, 3, 1, 1))
+        self.layers.append(conv_act(base_depth, base_depth, smallest_map_size))
+        self.layers.append(conv_act(base_depth, 1, 1))
 
         self.layers.apply(init_weights)
 
@@ -102,25 +104,24 @@ class Generator(nn.Module):
     ):
         assert img_size > 4 and math.log2(img_size).is_integer()
         super().__init__()
-        kwargs = dict(norm=norm, act=act)
-        conv3x3 = partial(conv_act_norm, kernel_size=3, padding=1, **kwargs)
+        conv_act_norm = partial(conv_norm_act, order=["conv", "act", "norm"], norm=norm, act=act)
 
         in_depth = z_dim
         depth = base_depth * img_size // smallest_map_size
         out_depth = min(depth, max_depth)
 
         self.layers = nn.Sequential()
-        self.layers.append(conv_act_norm(in_depth, out_depth, smallest_map_size, conv=nn.ConvTranspose2d, **kwargs))
-        self.layers.append(conv3x3(out_depth, out_depth))
+        self.layers.append(conv_act_norm(in_depth, out_depth, smallest_map_size, conv=nn.ConvTranspose2d))
+        self.layers.append(conv_act_norm(out_depth, out_depth, 3, padding=1))
         in_depth = out_depth
         depth //= 2
 
         while smallest_map_size < img_size:
             out_depth = min(depth, max_depth)
             self.layers.append(nn.Upsample(scale_factor=2.0))
-            self.layers.append(conv3x3(in_depth, out_depth))
+            self.layers.append(conv_act_norm(in_depth, out_depth, 3, padding=1))
             self.layers.append(Blur())
-            self.layers.append(conv3x3(out_depth, out_depth))
+            self.layers.append(conv_act_norm(out_depth, out_depth, 3, padding=1))
             in_depth = out_depth
             depth //= 2
             smallest_map_size *= 2
@@ -134,6 +135,6 @@ class Generator(nn.Module):
 
 
 def init_weights(module: nn.Module):
-    if isinstance(module, nn.modules.conv._ConvNd):
+    if isinstance(module, (nn.modules.conv._ConvNd, nn.Linear)):
         nn.init.kaiming_normal_(module.weight)
         nn.init.zeros_(module.bias)

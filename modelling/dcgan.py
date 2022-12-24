@@ -34,7 +34,7 @@ class Discriminator(nn.Module):
             assert c_dim > 0
             img_depth += c_dim
         super().__init__()
-        layer = partial(conv_norm_act, kernel_size=4, stride=2, padding=1, norm=norm, act=act)
+        layer = partial(conv_norm_act, kernel_size=4, stride=2, padding=1, bias=False, norm=norm, act=act)
 
         self.c_encoder = c_encoder
         self.layers = nn.Sequential()
@@ -80,25 +80,24 @@ class Generator(nn.Module):
             assert c_dim >= 0
             z_dim += c_dim
         super().__init__()
-        kwargs = dict(conv=nn.ConvTranspose2d, norm=norm, act=act)
+        layer = partial(conv_norm_act, bias=False, conv=nn.ConvTranspose2d, norm=norm, act=act)
 
         self.c_encoder = c_encoder
         self.layers = nn.Sequential()
 
         # matmul and reshape to 4x4
         depth = base_depth * img_size // 2 // smallest_map_size
-        self.layers.append(conv_norm_act(z_dim, depth, smallest_map_size, **kwargs))
+        self.layers.append(layer(z_dim, depth, smallest_map_size))
 
         # conv transpose until reaching image size / 2
-        kwargs.update(kernel_size=4, stride=2, padding=1)
         while smallest_map_size < img_size // 2:
-            self.layers.append(conv_norm_act(depth, depth // 2, **kwargs))
+            self.layers.append(layer(depth, depth // 2, 4, 2, 1))
             depth //= 2
             smallest_map_size *= 2
 
         # last layer use tanh activation
-        kwargs.update(norm=None, act=nn.Tanh)
-        self.layers.append(conv_norm_act(depth, img_depth, **kwargs))
+        self.layers.append(nn.ConvTranspose2d(depth, img_depth, 4, 2, 1))
+        self.layers.append(nn.Tanh)
 
         self.layers.apply(init_weights)
 

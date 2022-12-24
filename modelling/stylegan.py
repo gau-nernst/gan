@@ -13,7 +13,7 @@ import torch
 from torch import Tensor, nn
 
 from .base import Blur, _Act
-from .progressive_gan import Discriminator
+from .progressive_gan import Discriminator, init_weights
 
 
 class GeneratorBlock(nn.Module):
@@ -32,24 +32,15 @@ class GeneratorBlock(nn.Module):
         elif upsample:
             self.conv = nn.Sequential(
                 nn.Upsample(scale_factor=2.0),
-                nn.Conv2d(in_dim, out_dim, 3, 1, 1),
+                nn.Conv2d(in_dim, out_dim, 3, padding=1),
                 Blur([1, 2, 1]),
             )
         else:
-            self.conv = nn.Conv2d(in_dim, out_dim, 3, 1, 1)
-        self.noise_weight = nn.Parameter(torch.empty(1, out_dim, 1, 1))  # B in paper
+            self.conv = nn.Conv2d(in_dim, out_dim, 3, padding=1)
+        self.noise_weight = nn.Parameter(torch.zeros(1, out_dim, 1, 1))  # B in paper
         self.act = act()
         self.norm = nn.InstanceNorm2d(out_dim)
         self.style_map = nn.Linear(w_dim, out_dim * 2)  # A in paper
-
-        for m in self.modules():
-            if isinstance(m, nn.modules.conv._ConvNd):
-                nn.init.kaiming_normal_(m.weight)
-                nn.init.zeros_(m.bias)
-        nn.init.zeros_(self.noise_weight)
-        nn.init.kaiming_normal_(self.style_map.weight)
-        nn.init.ones_(self.style_map.bias[:out_dim])  # weight
-        nn.init.zeros_(self.style_map.bias[out_dim:])  # bias
 
     def forward(self, imgs: Tensor, w_embs: Tensor, noise: Optional[Tensor] = None):
         imgs = self.conv(imgs)
@@ -59,7 +50,7 @@ class GeneratorBlock(nn.Module):
         imgs = self.act(imgs + noise * self.noise_weight)
 
         style = self.style_map(w_embs).view(b, -1, 1, 1)
-        return self.norm(imgs) * style[:, :c] + style[:, c:]
+        return self.norm(imgs) * style[:, :c].add(1) + style[:, c:]
 
 
 class Generator(nn.Module):
@@ -106,6 +97,7 @@ class Generator(nn.Module):
         self.out_conv = nn.Conv2d(input_depth, img_depth, 1)
 
         nn.init.ones_(self.learned_input)
+        self.layers.apply(init_weights)
 
     def forward(self, z_embs: Tensor, ys: Optional[Tensor] = None):
         w_embs = self.mapping_network(z_embs)

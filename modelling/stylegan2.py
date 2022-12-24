@@ -14,7 +14,7 @@ import torch.nn.functional as F
 from torch import Tensor, nn
 
 from .base import Blur, _Act
-from .progressive_gan import Discriminator
+from .progressive_gan import Discriminator, init_weights
 
 
 class GeneratorBlock(nn.Module):
@@ -33,26 +33,19 @@ class GeneratorBlock(nn.Module):
         self.upsample = nn.Upsample(scale_factor=2.0) if upsample else None
         self.blur = Blur([1, 3, 3, 1]) if upsample else None
 
-        self.weight = nn.Parameter(torch.empty(out_dim, in_dim, kernel_size, kernel_size))
-        self.bias = nn.Parameter(torch.empty(1, out_dim, 1, 1))
-        self.noise_weight = nn.Parameter(torch.empty(1))  # B in paper
+        self.conv = nn.Conv2d(in_dim, out_dim, kernel_size)
+        self.noise_weight = nn.Parameter(torch.tensor(0.0))  # B in paper
         self.style_map = nn.Linear(w_dim, in_dim)  # A in paper
         self.act = act() if act is not None else nn.Identity()
-
-        nn.init.kaiming_normal_(self.weight)
-        nn.init.zeros_(self.bias)
-        nn.init.zeros_(self.noise_weight)
-        nn.init.kaiming_normal_(self.style_map.weight)
-        nn.init.ones_(self.style_map.bias)
 
     def forward(self, imgs: Tensor, w_embs: Tensor, noise: Optional[Tensor] = None):
         if self.upsample is not None:
             imgs = self.upsample(imgs)
         b, c, h, w = imgs.shape
-        out_dim, in_dim, ky, kx = self.weight.shape
+        out_dim, in_dim, ky, kx = self.conv.weight.shape
 
         # modulation
-        weight = self.weight[None] * self.style_map(w_embs).view(b, 1, c, 1, 1)
+        weight = self.conv.weight[None] * self.style_map(w_embs).add(1).view(b, 1, c, 1, 1)
         weight = weight.view(b * out_dim, in_dim, ky, kx)
         if self.demodulation:
             weight = F.normalize(weight, dim=(1, 2, 3))
@@ -64,11 +57,7 @@ class GeneratorBlock(nn.Module):
             imgs = self.blur(imgs)
 
         noise = noise or torch.randn(b, 1, h, w, device=imgs.device)
-        return self.act(imgs + self.bias + noise * self.noise_weight)
-
-    def extra_repr(self) -> str:
-        in_dim, out_dim, *kernel_size = self.weight.shape
-        return f"in_dim={in_dim}, out_dim={out_dim}, kernel_size={kernel_size}"
+        return self.act(imgs + self.conv.bias.view(1, -1, 1, 1) + noise * self.noise_weight)
 
 
 class Generator(nn.Module):
@@ -116,6 +105,7 @@ class Generator(nn.Module):
             smallest_map_size *= 2
 
         nn.init.ones_(self.learned_input)
+        self.layers.apply(init_weights)
 
     def forward(self, z_embs: Tensor, ys: Optional[Tensor] = None):
         w_embs = self.mapping_network(z_embs)

@@ -1,5 +1,5 @@
 from functools import partial
-from typing import Callable, List, Optional
+from typing import Callable, List, Literal, Optional
 
 import torch
 import torch.nn.functional as F
@@ -10,50 +10,31 @@ _Norm = Callable[[int], nn.Module]
 _Act = Callable[[], nn.Module]
 
 
-def conv_act(
-    in_dim: int,
-    out_dim: int,
-    kernel_size: int,
-    stride: int = 1,
-    padding: int = 0,
-    conv: _Conv = nn.Conv2d,
-    act: _Act = partial(nn.ReLU, inplace=True),
-):
-    return nn.Sequential(conv(in_dim, out_dim, kernel_size, stride, padding), act())
-
-
 def conv_norm_act(
     in_dim: int,
     out_dim: int,
     kernel_size: int,
     stride: int = 1,
     padding: int = 0,
+    bias: bool = True,
+    order: Optional[List[Literal["conv", "norm", "act"]]] = None,
     conv: _Conv = nn.Conv2d,
     norm: Optional[_Norm] = nn.BatchNorm2d,
     act: Optional[_Act] = partial(nn.ReLU, inplace=True),
 ):
-    return nn.Sequential(
-        conv(in_dim, out_dim, kernel_size, stride, padding, bias=norm is None),
-        norm(out_dim) if norm is not None else nn.Identity(),
-        act() if act is not None else nn.Identity(),
+    if order is None:
+        order = ["conv", "norm", "act"]
+    layers = nn.Sequential()
+    mapping = dict(
+        conv=partial(conv, in_dim, out_dim, kernel_size, stride, padding, bias=bias),
+        norm=partial(norm, in_dim),
+        act=act,
     )
-
-
-def conv_act_norm(
-    in_dim: int,
-    out_dim: int,
-    kernel_size: int,
-    stride: int = 1,
-    padding: int = 0,
-    conv: _Conv = nn.Conv2d,
-    norm: Optional[_Norm] = nn.BatchNorm2d,
-    act: Optional[_Act] = partial(nn.ReLU, inplace=True),
-):
-    return nn.Sequential(
-        conv(in_dim, out_dim, kernel_size, stride, padding),
-        act() if act is not None else nn.Identity(),
-        norm(out_dim) if norm is not None else nn.Identity(),
-    )
+    for name in order:
+        layers.append(mapping[name]())
+        if name == "conv":
+            mapping.update(norm=partial(norm, out_dim))
+    return layers
 
 
 class PixelNorm(nn.LayerNorm):
