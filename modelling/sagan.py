@@ -43,6 +43,71 @@ class SelfAttentionConv(nn.Module):
         return imgs + self.out_conv(out.view(b, -1, h, w)) * self.scale
 
 
+class DiscriminatorBlock(nn.Module):
+    def __init__(
+        self,
+        in_dim: int,
+        out_dim: int,
+        first_block: bool = False,
+        downsample: bool = True,
+        act: _Act = partial(nn.ReLU, True),
+    ):
+        super().__init__()
+        conv3x3 = partial(nn.Conv2d, kernel_size=3, padding=1)
+        self.layers = nn.Sequential(
+            nn.Identity() if first_block else act(),
+            conv3x3(in_dim, out_dim),
+            act(),
+            conv3x3(out_dim, out_dim),
+            nn.AvgPool2d(2) if downsample else nn.Identity(),
+        )
+        # NOTE: avg_pool + 1x1 conv is equivalent to 1x1 conv + avg_pool, but the former should be faster
+        if downsample:
+            self.shortcut = nn.Sequential(nn.AvgPool2d(2), nn.Conv2d(in_dim, out_dim, 1))
+        elif out_dim != in_dim:
+            self.shortcut = nn.Conv2d(in_dim, out_dim, 1)
+        else:
+            self.shortcut = nn.Identity()
+
+    def forward(self, imgs: Tensor):
+        return self.layers(imgs) + self.shortcut(imgs)
+
+
+class Discriminator(nn.Module):
+    def __init__(
+        self,
+        img_size: int,
+        img_depth: int,
+        smallest_map_size: int = 4,
+        base_depth: int = 32,
+        self_attention_sizes: Optional[List[int]] = None,
+        act: _Act = partial(nn.ReLU, True),
+    ):
+        if self_attention_sizes is None:
+            self_attention_sizes = [32]
+        super().__init__()
+        block = partial(DiscriminatorBlock, act=act)
+        self.layers = nn.Sequential()
+        self.layers.append(block(img_depth, base_depth, first_block=True))
+        img_size //= 2
+
+        while img_size > smallest_map_size:
+            self.layers.append(block(base_depth, base_depth * 2))
+            base_depth *= 2
+            img_size //= 2
+
+            if img_size in self_attention_sizes:
+                self.layers.append(SelfAttentionConv(base_depth))
+
+        self.layers.append(block(base_depth, base_depth, downsample=False))
+        self.layers.append(act())
+        self.layers.append(nn.AvgPool2d(4))  # official implementation uses sum
+        self.layers.append(nn.Conv2d(base_depth, 1, 1))
+
+    def forward(self, imgs: Tensor, ys: Optional[Tensor] = None):
+        return self.layers(imgs)
+
+
 class GeneratorStage(nn.Module):
     def __init__(self, in_dim: int, out_dim: int, act: _Act = partial(nn.ReLU, True)):
         super().__init__()
@@ -51,7 +116,7 @@ class GeneratorStage(nn.Module):
             act(),
             nn.Upsample(scale_factor=2.0),
             nn.Conv2d(in_dim, out_dim, 3, padding=1, bias=False),
-            conv_norm_act(out_dim, out_dim, 3, padding=1, order=["norm", "act", "conv"], act=act),
+            *conv_norm_act(out_dim, out_dim, 3, padding=1, order=["norm", "act", "conv"], act=act),
         )
         self.shortcut = nn.Sequential(
             nn.Upsample(scale_factor=2.0),
