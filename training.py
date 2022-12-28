@@ -74,8 +74,9 @@ class GANSystem(pl.LightningModule):
         optim_d = optim_cls(self.discriminator.parameters(), lr=self.hparams["lr_d"], **kwargs)
 
         if hasattr(self.generator, "mapping_network"):  # stylegan
-            group2 = self.generator.mapping_network.parameters()
-            group1 = [p for p in self.generator.parameters() if p not in group2]
+            group1 = [p for name, p in self.generator.named_parameters() if not name.startswith("mapping_network.")]
+            group2 = list(self.generator.mapping_network.parameters())
+            assert len(group1) + len(group2) == len(list(self.generator.parameters()))
             param_groups = [
                 dict(params=group1),
                 dict(params=group2, lr=self.hparams["lr_g"] / 100),
@@ -181,8 +182,10 @@ class ImageLoggingCallback(pl.Callback):
         generator = pl_module.generator
         logger = pl_module.logger
         global_step = pl_module.global_step
+        conditional = pl_module.hparams["conditional"]
 
-        images = generator(self.fixed_noise, self.fixed_y).mul_(0.5).add_(0.5)
+        images = generator(self.fixed_noise, self.fixed_y) if conditional else generator(self.fixed_noise)
+        images = images.mul_(0.5).add_(0.5)
         if isinstance(logger, TensorBoardLogger):
             logger.experiment.add_images("generated", images, global_step)
         elif isinstance(logger, WandbLogger):

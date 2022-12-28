@@ -1,13 +1,15 @@
 from functools import partial
 from typing import Callable, List, Literal, Optional
 
-import torch
-import torch.nn.functional as F
-from torch import Tensor, nn
+from torch import nn
 
 _Conv = Callable[..., nn.modules.conv._ConvNd]
 _Norm = Callable[[int], nn.Module]
 _Act = Callable[[], nn.Module]
+
+
+conv3x3 = partial(nn.Conv2d, kernel_size=3, padding=1)
+conv1x1 = partial(nn.Conv2d, kernel_size=1)
 
 
 def conv_norm_act(
@@ -35,22 +37,3 @@ def conv_norm_act(
         if name == "conv":
             mapping.update(norm=partial(norm, out_dim))
     return layers
-
-
-class PixelNorm(nn.LayerNorm):
-    def forward(self, x: Tensor) -> Tensor:
-        return F.normalize(x)
-
-
-class Blur(nn.Module):
-    def __init__(self, kernel: Optional[List[float]] = None):
-        super().__init__()
-        kernel = torch.tensor(kernel or [1, 2, 1], dtype=torch.float)
-        kernel = kernel.view(1, -1) * kernel.view(-1, 1)
-        kernel = kernel[None, None] / kernel.sum()
-        self.register_buffer("kernel", kernel)
-
-    def forward(self, imgs: Tensor):
-        channels = imgs.shape[1]
-        kernel = self.kernel.expand(channels, -1, -1, -1)
-        return F.conv2d(imgs, kernel, padding="same", groups=channels)

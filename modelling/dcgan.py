@@ -76,7 +76,7 @@ class Generator(nn.Module):
 
         # last layer use tanh activation
         self.layers.append(nn.ConvTranspose2d(depth, img_depth, 4, 2, 1))
-        self.layers.append(nn.Tanh)
+        self.layers.append(nn.Tanh())
 
         self.layers.apply(init_weights)
 

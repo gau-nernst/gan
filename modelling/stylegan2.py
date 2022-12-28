@@ -7,14 +7,14 @@
 
 import math
 from functools import partial
-from typing import Optional
+from typing import List, Optional
 
 import torch
 import torch.nn.functional as F
 from torch import Tensor, nn
 
-from .base import Blur, _Act
-from .progressive_gan import Discriminator, init_weights
+from .base import _Act
+from .progressive_gan import Blur, Discriminator, init_weights
 
 
 class GeneratorBlock(nn.Module):
@@ -24,14 +24,16 @@ class GeneratorBlock(nn.Module):
         out_dim: int,
         w_dim: int,
         kernel_size: int,
-        act: Optional[_Act] = partial(nn.LeakyReLU, 0.2, True),
         upsample: bool = False,
         demodulation: bool = True,
+        act: Optional[_Act] = partial(nn.LeakyReLU, 0.2, True),
+        blur_kernel: Optional[List[float]] = None,
     ):
+        blur_kernel = blur_kernel or [1, 3, 3, 1]
         super().__init__()
         self.demodulation = demodulation
         self.upsample = nn.Upsample(scale_factor=2.0) if upsample else None
-        self.blur = Blur([1, 3, 3, 1]) if upsample else None
+        self.blur = Blur(blur_kernel) if upsample else None
 
         self.conv = nn.Conv2d(in_dim, out_dim, kernel_size)
         self.noise_weight = nn.Parameter(torch.tensor(0.0))  # B in paper
@@ -73,8 +75,10 @@ class Generator(nn.Module):
         base_depth: int = 16,
         max_depth: int = 512,
         act: _Act = partial(nn.LeakyReLU, 0.2, True),
+        blur_kernel: Optional[List[float]] = None,
     ):
         assert img_size > 4 and math.log2(img_size).is_integer()
+        blur_kernel = blur_kernel or [1, 3, 3, 1]
         super().__init__()
         self.mapping_network = nn.Sequential()
         for i in range(mapping_network_depth):
@@ -82,7 +86,7 @@ class Generator(nn.Module):
             self.mapping_network.append(act())
 
         self.learned_input = nn.Parameter(torch.empty(1, input_depth, smallest_map_size, smallest_map_size))
-        self.upsample_blur = nn.Sequential(nn.Upsample(scale_factor=2.0), Blur([1, 3, 3, 1]))
+        self.upsample_blur = nn.Sequential(nn.Upsample(scale_factor=2.0), Blur(blur_kernel))
 
         block = partial(GeneratorBlock, w_dim=w_dim, kernel_size=3, act=act)
         to_rgb = partial(GeneratorBlock, out_dim=img_depth, w_dim=w_dim, kernel_size=1, demodulation=False, act=None)

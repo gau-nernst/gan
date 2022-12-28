@@ -7,13 +7,13 @@
 
 import math
 from functools import partial
-from typing import Optional
+from typing import List, Optional
 
 import torch
 from torch import Tensor, nn
 
-from .base import Blur, _Act
-from .progressive_gan import Discriminator, init_weights
+from .base import _Act, conv1x1, conv3x3
+from .progressive_gan import Blur, Discriminator, init_weights
 
 
 class GeneratorBlock(nn.Module):
@@ -22,21 +22,23 @@ class GeneratorBlock(nn.Module):
         in_dim: int,
         out_dim: int,
         w_dim: int,
-        act: _Act = partial(nn.LeakyReLU, 0.2, True),
         first_block: bool = False,
         upsample: bool = False,
+        act: _Act = partial(nn.LeakyReLU, 0.2, True),
+        blur_kernel: Optional[List[float]] = None,
     ):
+        blur_kernel = blur_kernel or [1, 2, 1]
         super().__init__()
         if first_block:
             self.conv = nn.Identity()
         elif upsample:
             self.conv = nn.Sequential(
                 nn.Upsample(scale_factor=2.0),
-                nn.Conv2d(in_dim, out_dim, 3, padding=1),
-                Blur([1, 2, 1]),
+                conv3x3(in_dim, out_dim),
+                Blur(blur_kernel),
             )
         else:
-            self.conv = nn.Conv2d(in_dim, out_dim, 3, padding=1)
+            self.conv = conv3x3(in_dim, out_dim)
         self.noise_weight = nn.Parameter(torch.zeros(1, out_dim, 1, 1))  # B in paper
         self.act = act()
         self.norm = nn.InstanceNorm2d(out_dim)
@@ -66,6 +68,7 @@ class Generator(nn.Module):
         base_depth: int = 16,
         max_depth: int = 512,
         act: _Act = partial(nn.LeakyReLU, 0.2, True),
+        blur_kernel: Optional[List[float]] = None,
     ):
         assert img_size > 4 and math.log2(img_size).is_integer()
         super().__init__()
@@ -76,7 +79,7 @@ class Generator(nn.Module):
 
         self.learned_input = nn.Parameter(torch.empty(1, input_depth, smallest_map_size, smallest_map_size))
 
-        block = partial(GeneratorBlock, w_dim=w_dim, act=act)
+        block = partial(GeneratorBlock, w_dim=w_dim, act=act, blur_kernel=blur_kernel)
         depth = base_depth * img_size // smallest_map_size
         out_depth = min(depth, max_depth)
 
@@ -94,7 +97,7 @@ class Generator(nn.Module):
             depth //= 2
             smallest_map_size *= 2
 
-        self.out_conv = nn.Conv2d(input_depth, img_depth, 1)
+        self.out_conv = conv1x1(input_depth, img_depth)
 
         nn.init.ones_(self.learned_input)
         self.layers.apply(init_weights)
