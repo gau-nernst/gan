@@ -10,8 +10,9 @@ Features:
 - Architectures
   - DCGAN
   - NVIDIA GANs (WIP): Progressive GAN, StyleGAN, StyleGAN2
-  - Conditional GAN: only implemented for DCGAN for now
-  - TODO: SA-GAN, BigGAN
+  - Conditional GAN
+  - SA-GAN (WIP): no conditional generation yet
+  - BigGAN (TODO)
 
 ## Usage
 
