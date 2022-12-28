@@ -107,7 +107,7 @@ class Generator(nn.Module):
         nn.init.ones_(self.learned_input)
         self.layers.apply(init_weights)
 
-    def forward(self, z_embs: Tensor, ys: Optional[Tensor] = None):
+    def forward(self, z_embs: Tensor):
         w_embs = self.mapping_network(z_embs)
         x = self.learned_input.expand(z_embs.size(0), -1, -1, -1)
         y = 0

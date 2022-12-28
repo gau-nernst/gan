@@ -86,7 +86,7 @@ class Discriminator(nn.Module):
 
         self.layers.apply(init_weights)
 
-    def forward(self, imgs: Tensor, ys: Optional[Tensor] = None):
+    def forward(self, imgs: Tensor):
         return self.layers(imgs)
 
 
@@ -130,7 +130,7 @@ class Generator(nn.Module):
 
         self.layers.apply(init_weights)
 
-    def forward(self, z_embs: Tensor, ys: Optional[Tensor] = None):
+    def forward(self, z_embs: Tensor):
         return self.layers(F.normalize(z_embs)[:, :, None, None])
 
 

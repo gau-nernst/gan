@@ -21,6 +21,7 @@ class GANSystem(pl.LightningModule):
         self,
         discriminator: nn.Module,
         generator: nn.Module,
+        conditional: bool = False,
         z_dim: int = 128,
         method: str = "gan",
         spectral_norm_d: bool = False,
@@ -31,6 +32,8 @@ class GANSystem(pl.LightningModule):
         train_g_interval: int = 1,
         optimizer: str = "Adam",
         lr: float = 2e-4,
+        lr_d: Optional[float] = None,
+        lr_g: Optional[float] = None,
         weight_decay: float = 0,
         beta1: float = 0.5,
         beta2: float = 0.999,
@@ -40,19 +43,22 @@ class GANSystem(pl.LightningModule):
         assert optimizer in ("SGD", "Adam", "AdamW", "RMSprop")
         assert clip > 0
         super().__init__()
+        # TODO: fix model checkpoint when spectral norm is applied
         if spectral_norm_d:
             apply_spectral_normalization(discriminator)
         if spectral_norm_g:
             apply_spectral_normalization(generator)
         self.discriminator = discriminator
         self.generator = generator
+        lr_d = lr_d or lr
+        lr_g = lr_g or lr
         self.save_hyperparameters(ignore=["discriminator", "generator", "condition_encoder"])
 
         self.automatic_optimization = False
 
     def generate(self, bsize: int, ys: Optional[Tensor] = None) -> Tensor:
         z_noise = torch.randn(bsize, self.hparams["z_dim"], device=self.device)
-        return self.generator(z_noise, ys)
+        return self.generator(z_noise) if ys is None else self.generator(z_noise, ys)
 
     def _optim_step(self, loss: Tensor, optim: LightningOptimizer):
         optim.zero_grad()
@@ -61,22 +67,23 @@ class GANSystem(pl.LightningModule):
 
     def configure_optimizers(self):
         optim_cls = getattr(torch.optim, self.hparams["optimizer"])
-        kwargs = dict(lr=self.hparams["lr"], weight_decay=self.hparams["weight_decay"])
+        kwargs = dict(weight_decay=self.hparams["weight_decay"])
         if self.hparams["optimizer"] in ("Adam", "AdamW"):
             kwargs.update(betas=(self.hparams["beta1"], self.hparams["beta2"]))
 
-        optim_d = optim_cls(self.discriminator.parameters(), **kwargs)
+        optim_d = optim_cls(self.discriminator.parameters(), lr=self.hparams["lr_d"], **kwargs)
 
         if hasattr(self.generator, "mapping_network"):  # stylegan
-            group1 = [p for name, p in self.generator.named_parameters() if not name.startswith("mapping_network.")]
             group2 = self.generator.mapping_network.parameters()
+            group1 = [p for p in self.generator.parameters() if p not in group2]
             param_groups = [
                 dict(params=group1),
-                dict(params=group2, lr=kwargs["lr"] / 100),
+                dict(params=group2, lr=self.hparams["lr_g"] / 100),
             ]
             optim_g = optim_cls(param_groups, **kwargs)
         else:
-            optim_g = optim_cls(self.generator.parameters(), **kwargs)
+            param_groups = [dict(params=list(self.generator.parameters()))]
+        optim_g = optim_cls(param_groups, lr=self.hparams["lr_g"], **kwargs)
 
         return optim_d, optim_g
 
@@ -85,11 +92,19 @@ class GANSystem(pl.LightningModule):
         optim_d, optim_g = self.optimizers()
         bsize = x_reals.size(0)
         method = self.hparams["method"]
+        conditional = self.hparams["conditional"]
 
         # train D
-        with torch.no_grad():
-            x_fakes = self.generate(bsize, ys)
-        d_reals, d_fakes = map(self.discriminator, (x_reals, x_fakes), (ys, ys))
+        if conditional:
+            with torch.no_grad():
+                x_fakes = self.generate(bsize, ys)
+            d_reals = self.discriminator(x_reals, ys)
+            d_fakes = self.discriminator(x_fakes, ys)
+        else:
+            with torch.no_grad():
+                x_fakes = self.generate(bsize)
+            d_reals = self.discriminator(x_reals)
+            d_fakes = self.discriminator(x_fakes)
 
         if method == "gan":
             loss_d_real = -F.logsigmoid(d_reals).mean() * (1.0 - self.hparams["label_smoothing"])
@@ -102,7 +117,7 @@ class GANSystem(pl.LightningModule):
             if method == "wgan-gp":
                 alpha = torch.rand(bsize, 1, 1, 1, device=self.device)
                 x_inters = (x_reals * alpha + x_fakes * (1 - alpha)).requires_grad_()
-                d_inters = self.discriminator(x_inters)
+                d_inters = self.discriminator(x_inters, ys) if conditional else self.discriminator(x_inters)
 
                 (d_grad,) = torch.autograd.grad(d_inters, x_inters, torch.ones_like(d_inters), create_graph=True)
                 d_grad_norm = torch.linalg.vector_norm(d_grad, dim=(1, 2, 3))
@@ -128,8 +143,13 @@ class GANSystem(pl.LightningModule):
         # train G
         if (batch_idx + 1) % self.hparams["train_g_interval"] == 0:
             self.discriminator.requires_grad_(False)
-            x_fakes = self.generate(bsize, ys)
-            d_fakes = self.discriminator(x_fakes, ys)
+
+            if conditional:
+                x_fakes = self.generate(bsize, ys)
+                d_fakes = self.discriminator(x_fakes, ys)
+            else:
+                x_fakes = self.generate(bsize)
+                d_fakes = self.discriminator(x_fakes)
 
             if method == "gan":
                 loss_g = -F.logsigmoid(d_fakes).mean()
@@ -142,6 +162,7 @@ class GANSystem(pl.LightningModule):
 
             self._optim_step(loss_g, optim_g)
             self.log("loss_g", loss_g)
+
             self.discriminator.requires_grad_(True)
 
     def validation_step(self, batch: Tuple[Tensor, Tensor], batch_idx: int):

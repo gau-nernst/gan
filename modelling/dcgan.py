@@ -8,9 +8,7 @@
 
 import math
 from functools import partial
-from typing import Optional
 
-import torch
 from torch import Tensor, nn
 
 from .base import _Act, _Norm, conv_norm_act
@@ -25,18 +23,12 @@ class Discriminator(nn.Module):
         base_depth: int = 64,
         norm: _Norm = nn.BatchNorm2d,
         act: _Act = partial(nn.LeakyReLU, 0.2, True),
-        c_encoder: Optional[nn.Module] = None,
-        c_dim: int = 0,
     ):
         assert img_size >= 4 and math.log2(img_size).is_integer()
         assert math.log2(smallest_map_size).is_integer()
-        if c_encoder is not None:
-            assert c_dim > 0
-            img_depth += c_dim
         super().__init__()
         layer = partial(conv_norm_act, kernel_size=4, stride=2, padding=1, bias=False, norm=norm, act=act)
 
-        self.c_encoder = c_encoder
         self.layers = nn.Sequential()
         self.layers.append(layer(img_depth, base_depth))
         img_size /= 2
@@ -52,12 +44,7 @@ class Discriminator(nn.Module):
 
         self.layers.apply(init_weights)
 
-    def forward(self, imgs: Tensor, ys: Optional[Tensor] = None):
-        if self.c_encoder is not None:
-            assert ys is not None
-            img_h, img_w = imgs.shape[2:]
-            y_embs = self.c_encoder(ys)[:, :, None, None].expand(-1, -1, img_h, img_w)
-            imgs = torch.cat([imgs, y_embs], dim=1)
+    def forward(self, imgs: Tensor):
         return self.layers(imgs)
 
 
@@ -71,23 +58,15 @@ class Generator(nn.Module):
         base_depth: int = 64,
         norm: _Norm = nn.BatchNorm2d,
         act: _Act = partial(nn.ReLU, True),
-        c_encoder: Optional[nn.Module] = None,
-        c_dim: int = 0,
     ):
         assert img_size >= 4 and math.log2(img_size).is_integer()
         assert math.log2(smallest_map_size).is_integer()
-        if c_encoder is not None:
-            assert c_dim >= 0
-            z_dim += c_dim
         super().__init__()
         layer = partial(conv_norm_act, bias=False, conv=nn.ConvTranspose2d, norm=norm, act=act)
-
-        self.c_encoder = c_encoder
-        self.layers = nn.Sequential()
-
-        # matmul and reshape to 4x4
         depth = base_depth * img_size // 2 // smallest_map_size
-        self.layers.append(layer(z_dim, depth, smallest_map_size))
+
+        self.layers = nn.Sequential()
+        self.layers.append(layer(z_dim, depth, smallest_map_size))  # matmul and reshape to 4x4
 
         # conv transpose until reaching image size / 2
         while smallest_map_size < img_size // 2:
@@ -101,11 +80,7 @@ class Generator(nn.Module):
 
         self.layers.apply(init_weights)
 
-    def forward(self, z_embs: Tensor, ys: Optional[Tensor] = None):
-        if self.c_encoder is not None:
-            assert ys is not None
-            y_embs = self.c_encoder(ys)
-            z_embs = torch.cat([z_embs, y_embs], dim=1)
+    def forward(self, z_embs: Tensor):
         return self.layers(z_embs[:, :, None, None])
 
 
