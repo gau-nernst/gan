@@ -33,12 +33,12 @@ class Blur(nn.Module):
 
 
 class PixelNorm(nn.Module):
-    def __init__(self, in_dim: int, eps: float = 1e-8):
+    def __init__(self, in_dim: int):
         super().__init__()
-        self.eps = eps
+        self.scale = in_dim**0.5
 
     def forward(self, x: Tensor) -> Tensor:
-        return x / (torch.std(x, dim=1, unbiased=False, keepdim=True) + self.eps)
+        return F.normalize(x) * self.scale
 
 
 class MinibatchStdDev(nn.Module):
