@@ -31,7 +31,7 @@ class Discriminator(nn.Module):
 
         self.layers = nn.Sequential()
         self.layers.append(layer(img_depth, base_depth))
-        img_size /= 2
+        img_size //= 2
 
         # add strided conv until image size = 4
         while img_size > smallest_map_size:
@@ -42,10 +42,13 @@ class Discriminator(nn.Module):
         # flatten and matmul
         self.layers.append(nn.Conv2d(base_depth, 1, smallest_map_size))
 
-        self.layers.apply(init_weights)
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        self.apply(init_weights)
 
     def forward(self, imgs: Tensor):
-        return self.layers(imgs)
+        return self.layers(imgs).view(-1)
 
 
 class Generator(nn.Module):
@@ -78,7 +81,10 @@ class Generator(nn.Module):
         self.layers.append(nn.ConvTranspose2d(depth, img_depth, 4, 2, 1))
         self.layers.append(nn.Tanh())
 
-        self.layers.apply(init_weights)
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        self.apply(init_weights)
 
     def forward(self, z_embs: Tensor):
         return self.layers(z_embs[:, :, None, None])

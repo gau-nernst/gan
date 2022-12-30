@@ -14,14 +14,16 @@ NOISE_SHAPE = (BATCH_SIZE, Z_DIM)
 @pytest.mark.parametrize("module", (dcgan, progressive_gan, stylegan, stylegan2, sagan))
 def test_discriminator(module):
     D = module.Discriminator(img_size=IMG_SIZE, img_depth=IMG_DEPTH)
+    assert hasattr(D, "reset_parameters")
     out = D(torch.randn(IMG_SHAPE))
-    assert out.shape == (BATCH_SIZE, 1, 1, 1)
+    assert out.shape == (BATCH_SIZE,)
     out.mean().backward()
 
 
 @pytest.mark.parametrize("module", (dcgan, progressive_gan, stylegan, stylegan2, sagan))
 def test_generator(module):
     G = module.Generator(img_size=IMG_SIZE, img_depth=IMG_DEPTH, z_dim=Z_DIM)
+    assert hasattr(G, "reset_parameters")
     out = G(torch.randn(NOISE_SHAPE))
     assert out.shape == IMG_SHAPE
     out.mean().backward()

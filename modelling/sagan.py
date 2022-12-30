@@ -16,19 +16,17 @@ import torch
 import torch.nn.functional as F
 from torch import Tensor, nn
 
-from .base import _Act, _Norm, conv1x1, conv3x3, conv_norm_act
+from .base import _Act, _Norm, conv1x1, conv3x3
 
 
-class ConditionalBatchNorm2d(nn.BatchNorm2d):
-    def __init__(self, num_features: int, y_features: int, layer: Callable[[int, int], nn.Module] = nn.Embedding):
-        super().__init__(num_features, affine=False)
-        self.weight_proj = layer(y_features, num_features)
-        self.bias_proj = layer(y_features, num_features)
+class Style(nn.Module):
+    def __init__(self, y_dim: int, dim: int, layer: Callable[[int, int], nn.Module] = nn.Embedding):
+        super().__init__()
+        self.proj = layer(y_dim, dim * 2)
 
     def forward(self, imgs: Tensor, ys: Tensor):
-        imgs = super().forward(imgs)()
-        weight = self.weight_proj(ys).view(-1, self.num_features, 1, 1)
-        bias = self.bias_proj(ys).view(-1, self.num_features, 1, 1)
+        b = imgs.shape[0]
+        weight, bias = torch.chunk(self.proj(ys).view(b, -1, 1, 1), 2, dim=1)
         return imgs * weight + bias
 
 
@@ -52,7 +50,8 @@ class SelfAttentionConv2d(nn.Module):
         q, k, v = map(partial(torch.flatten, start_dim=2), (q, k, v))
 
         # NOTE: ((Q K^T) V)^T = V^T (Q^T K)^T
-        out = v @ (q.transpose(1, 2) @ k).softmax(dim=2).transpose(1, 2)
+        attn = torch.bmm(q.transpose(1, 2), k).softmax(dim=2)
+        out = torch.bmm(v, attn.transpose(1, 2))
         return imgs + self.out_conv(out.view(b, -1, h, w)) * self.scale
 
 
@@ -90,6 +89,7 @@ class Discriminator(nn.Module):
         self,
         img_size: int,
         img_depth: int,
+        y_dim: Optional[int] = None,
         smallest_map_size: int = 4,
         base_depth: int = 32,
         self_attention_sizes: Optional[List[int]] = None,
@@ -114,10 +114,23 @@ class Discriminator(nn.Module):
         self.layers.append(block(base_depth, base_depth, downsample=False))
         self.layers.append(act())
         self.layers.append(nn.AvgPool2d(4))  # official implementation uses sum
-        self.layers.append(conv1x1(base_depth, 1))
+
+        self.y_layer = nn.Embedding(y_dim, base_depth) if y_dim is not None else None
+        self.out_layer = conv1x1(base_depth, 1)
+
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        self.apply(init_weights)
 
     def forward(self, imgs: Tensor, ys: Optional[Tensor] = None):
-        return self.layers(imgs)
+        emb = self.layers(imgs)
+        out = self.out_layer(emb).view(-1)
+        if self.y_layer is not None:
+            b = imgs.shape[0]
+            projection = torch.bmm(emb.view(b, 1, -1), self.y_layer(ys).view(b, -1, 1))
+            out = out + projection.view(b)
+        return out
 
 
 class GeneratorStage(nn.Module):
@@ -125,20 +138,28 @@ class GeneratorStage(nn.Module):
         self,
         in_dim: int,
         out_dim: int,
+        y_dim: Optional[int] = None,
         norm: _Norm = nn.BatchNorm2d,
         act: _Act = partial(nn.ReLU, True),
     ):
         super().__init__()
-        layers = [
-            norm(in_dim),
-            act(),
-            nn.Upsample(scale_factor=2.0),
-            conv3x3(in_dim, out_dim, bias=False),
-            norm(out_dim),
-            act(),
-            conv3x3(out_dim, out_dim),
-        ]
-        self.layers = nn.ModuleList(layers)
+        if y_dim is not None:  # override affine=False for conditional generation
+            norm = partial(norm, affine=False)
+        self.layers = nn.ModuleList()
+        
+        self.layers.append(norm(in_dim))
+        if y_dim is not None:
+            self.layers.append(Style(y_dim, in_dim))
+        self.layers.append(act())
+        self.layers.append(nn.Upsample(scale_factor=2.0))
+        self.layers.append(conv3x3(in_dim, out_dim, bias=False))
+
+        self.layers.append(norm(out_dim))
+        if y_dim is not None:
+            self.layers.append(Style(y_dim, out_dim))
+        self.layers.append(act())
+        self.layers.append(conv3x3(out_dim, out_dim))
+
         self.shortcut = nn.Sequential(
             nn.Upsample(scale_factor=2.0),
             conv1x1(in_dim, out_dim),
@@ -147,7 +168,7 @@ class GeneratorStage(nn.Module):
     def forward(self, imgs: Tensor, ys: Optional[Tensor] = None):
         shortcut = self.shortcut(imgs)
         for layer in self.layers:
-            if isinstance(layer, ConditionalBatchNorm2d):
+            if isinstance(layer, Style):
                 imgs = layer(imgs, ys)
             else:
                 imgs = layer(imgs)
@@ -160,18 +181,20 @@ class Generator(nn.Module):
         img_size: int,
         img_depth: int,
         z_dim: int,
+        y_dim: Optional[int] = None,
         smallest_map_size: int = 4,
         base_depth: int = 32,
         self_attention_sizes: Optional[List[int]] = None,
+        norm: _Norm = nn.BatchNorm2d,
         act: _Act = partial(nn.ReLU, True),
     ):
         if self_attention_sizes is None:
             self_attention_sizes = [32]
         super().__init__()
-        stage = partial(GeneratorStage, act=act)
+        stage = partial(GeneratorStage, y_dim=y_dim, norm=norm, act=act)
         depth = base_depth * img_size // smallest_map_size // 2
 
-        self.layers = nn.Sequential()
+        self.layers = nn.ModuleList()
         self.layers.append(nn.ConvTranspose2d(z_dim, depth, smallest_map_size))
         in_depth = depth
         while smallest_map_size < img_size:
@@ -183,8 +206,28 @@ class Generator(nn.Module):
             if smallest_map_size in self_attention_sizes:
                 self.layers.append(SelfAttentionConv2d(in_depth))
 
-        self.layers.append(conv_norm_act(in_depth, img_depth, 3, padding=1, order=["norm", "act", "conv"], act=act))
+        self.layers.append(norm(in_depth))
+        self.layers.append(act())
+        self.layers.append(conv3x3(in_depth, img_depth))
         self.layers.append(nn.Tanh())
 
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        self.apply(init_weights)
+
     def forward(self, z_embs: Tensor, ys: Optional[Tensor] = None):
-        return self.layers(z_embs[:, :, None, None])
+        out = z_embs[:, :, None, None]
+        for layer in self.layers:
+            if isinstance(layer, GeneratorStage):
+                out = layer(out, ys)
+            else:
+                out = layer(out)
+        return out
+
+
+def init_weights(module: nn.Module):
+    if isinstance(module, nn.modules.conv._ConvNd):
+        nn.init.xavier_uniform_(module.weight)
+        if module.bias is not None:
+            nn.init.zeros_(module.bias)

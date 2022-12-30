@@ -47,10 +47,11 @@ class GeneratorBlock(nn.Module):
         out_dim, in_dim, ky, kx = self.conv.weight.shape
 
         # modulation
-        weight = self.conv.weight[None] * self.style_map(w_embs).add(1).view(b, 1, c, 1, 1)
+        style = self.style_map(w_embs).add(1).view(b, 1, c, 1, 1)
+        weight = self.conv.weight.unsqueeze(0) * style
         weight = weight.view(b * out_dim, in_dim, ky, kx)
         if self.demodulation:
-            weight = F.normalize(weight, dim=(1, 2, 3))
+            weight = weight / torch.linalg.vector_norm(weight, dim=(1, 2, 3), keepdim=True)
 
         imgs = imgs.reshape(1, b * c, h, w)
         imgs = F.conv2d(imgs, weight, padding="same", groups=b)
@@ -108,6 +109,9 @@ class Generator(nn.Module):
             depth //= 2
             smallest_map_size *= 2
 
+        self.reset_parameters()
+
+    def reset_parameters(self):
         nn.init.ones_(self.learned_input)
         self.layers.apply(init_weights)
 

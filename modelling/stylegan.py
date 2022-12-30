@@ -12,7 +12,7 @@ from typing import List, Optional
 import torch
 from torch import Tensor, nn
 
-from .base import _Act, conv1x1, conv3x3
+from .base import _Act, _Norm, conv1x1, conv3x3
 from .progressive_gan import Blur, Discriminator, init_weights
 
 
@@ -24,6 +24,7 @@ class GeneratorBlock(nn.Module):
         w_dim: int,
         first_block: bool = False,
         upsample: bool = False,
+        norm: _Norm = nn.InstanceNorm2d,
         act: _Act = partial(nn.LeakyReLU, 0.2, True),
         blur_kernel: Optional[List[float]] = None,
     ):
@@ -41,7 +42,7 @@ class GeneratorBlock(nn.Module):
             self.conv = conv3x3(in_dim, out_dim)
         self.noise_weight = nn.Parameter(torch.zeros(1, out_dim, 1, 1))  # B in paper
         self.act = act()
-        self.norm = nn.InstanceNorm2d(out_dim)
+        self.norm = norm(out_dim)
         self.style_map = nn.Linear(w_dim, out_dim * 2)  # A in paper
 
     def forward(self, imgs: Tensor, w_embs: Tensor, noise: Optional[Tensor] = None):
@@ -99,6 +100,9 @@ class Generator(nn.Module):
 
         self.out_conv = conv1x1(input_depth, img_depth)
 
+        self.reset_parameters()
+
+    def reset_parameters(self):
         nn.init.ones_(self.learned_input)
         self.layers.apply(init_weights)
 

@@ -109,10 +109,13 @@ class Discriminator(nn.Module):
         self.layers.append(conv_act(base_depth, base_depth, smallest_map_size))
         self.layers.append(conv1x1(base_depth, 1))
 
-        self.layers.apply(init_weights)
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        self.apply(init_weights)
 
     def forward(self, imgs: Tensor):
-        return self.layers(imgs)
+        return self.layers(imgs).view(-1)
 
 
 class Generator(nn.Module):
@@ -124,7 +127,7 @@ class Generator(nn.Module):
         base_depth: int = 16,
         max_depth: int = 512,
         smallest_map_size: int = 4,
-        norm: Optional[_Norm] = PixelNorm,
+        norm: _Norm = PixelNorm,
         act: _Act = partial(nn.LeakyReLU, 0.2, True),
         blur_kernel: List[float] = None,
     ):
@@ -157,7 +160,10 @@ class Generator(nn.Module):
 
         self.layers.append(conv3x3(in_depth, img_depth))
 
-        self.layers.apply(init_weights)
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        self.apply(init_weights)
 
     def forward(self, z_embs: Tensor):
         return self.layers(z_embs[:, :, None, None])
@@ -166,4 +172,5 @@ class Generator(nn.Module):
 def init_weights(module: nn.Module):
     if isinstance(module, (nn.modules.conv._ConvNd, nn.Linear)):
         nn.init.kaiming_normal_(module.weight)
-        nn.init.zeros_(module.bias)
+        if module.bias is not None:
+            nn.init.zeros_(module.bias)
