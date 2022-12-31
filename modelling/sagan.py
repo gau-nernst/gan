@@ -124,13 +124,13 @@ class Discriminator(nn.Module):
         self.apply(init_weights)
 
     def forward(self, imgs: Tensor, ys: Optional[Tensor] = None):
-        emb = self.layers(imgs)
-        out = self.out_layer(emb).view(-1)
+        embs = self.layers(imgs)
+        logits = self.out_layer(embs).view(-1)
         if self.y_layer is not None:
             b = imgs.shape[0]
-            projection = torch.bmm(emb.view(b, 1, -1), self.y_layer(ys).view(b, -1, 1))
-            out = out + projection.view(b)
-        return out
+            y_logits = torch.bmm(embs.view(b, 1, -1), self.y_layer(ys).view(b, -1, 1))
+            logits = logits + y_logits.view(b)
+        return logits
 
 
 class GeneratorStage(nn.Module):
@@ -146,7 +146,7 @@ class GeneratorStage(nn.Module):
         if y_dim is not None:  # override affine=False for conditional generation
             norm = partial(norm, affine=False)
         self.layers = nn.ModuleList()
-        
+
         self.layers.append(norm(in_dim))
         if y_dim is not None:
             self.layers.append(Style(y_dim, in_dim))
