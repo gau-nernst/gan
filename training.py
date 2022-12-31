@@ -1,11 +1,15 @@
-from typing import Optional, Tuple
+import copy
+import datetime
+import itertools
+from dataclasses import dataclass
+from typing import Literal, Optional
 
-import pytorch_lightning as pl
 import torch
 import torch.nn.functional as F
-from pytorch_lightning.core.optimizer import LightningOptimizer
-from pytorch_lightning.loggers import TensorBoardLogger, WandbLogger
+from accelerate import Accelerator
 from torch import Tensor, nn
+from torch.utils.data import DataLoader
+from tqdm import tqdm
 
 
 def apply_spectral_normalization(module: nn.Module):
@@ -16,99 +20,135 @@ def apply_spectral_normalization(module: nn.Module):
             apply_spectral_normalization(child)
 
 
-class GANSystem(pl.LightningModule):
-    def __init__(
-        self,
-        discriminator: nn.Module,
-        generator: nn.Module,
-        conditional: bool = False,
-        z_dim: int = 128,
-        method: str = "gan",
-        spectral_norm_d: bool = False,
-        spectral_norm_g: bool = False,
-        label_smoothing: float = 0.0,
-        clip: float = 0.01,
-        lamb: float = 10.0,
-        train_g_interval: int = 1,
-        optimizer: str = "Adam",
-        lr: float = 2e-4,
-        lr_d: Optional[float] = None,
-        lr_g: Optional[float] = None,
-        weight_decay: float = 0,
-        beta1: float = 0.5,
-        beta2: float = 0.999,
-        **kwargs,
-    ):
-        assert method in ("gan", "wgan", "wgan-gp", "hinge")
-        assert optimizer in ("SGD", "Adam", "AdamW", "RMSprop")
-        assert clip > 0
-        super().__init__()
-        # TODO: fix model checkpoint when spectral norm is applied
-        if spectral_norm_d:
-            apply_spectral_normalization(discriminator)
-        if spectral_norm_g:
-            apply_spectral_normalization(generator)
-        self.discriminator = discriminator
-        self.generator = generator
-        lr_d = lr_d or lr
-        lr_g = lr_g or lr
-        self.save_hyperparameters(ignore=["discriminator", "generator", "condition_encoder"])
+@dataclass
+class GANTrainerConfig:
+    conditional: bool = False
+    z_dim: int = 128
+    method: Literal["gan", "wgan", "wgan-gp", "hinge"] = "gan"
+    spectral_norm_d: bool = False
+    spectral_norm_g: bool = False
+    label_smoothing: float = 0.0
+    clip: float = 0.01
+    lamb: float = 10.0
+    train_g_interval: int = 1
+    optimizer: Literal["SGD", "Adam", "AdamW", "RMSprop"] = "Adam"
+    lr: float = 2e-4
+    lr_d: Optional[float] = None
+    lr_g: Optional[float] = None
+    weight_decay: float = 0
+    beta1: float = 0.5
+    beta2: float = 0.999
+    n_steps: int = 10000
+    log_name: str = "gan"
+    log_img_interval: int = 1000
 
-        self.automatic_optimization = False
 
-    def generate(self, bsize: int, ys: Optional[Tensor] = None) -> Tensor:
-        z_noise = torch.randn(bsize, self.hparams["z_dim"], device=self.device)
-        return self.generator(z_noise) if ys is None else self.generator(z_noise, ys)
+class GANTrainer:
+    def __init__(self, D: nn.Module, G: nn.Module, config: GANTrainerConfig):
+        assert config.clip > 0
+        config = copy.deepcopy(config)
+        config.lr_d = config.lr_d or config.lr
+        config.lr_g = config.lr_g or config.lr
+        config.log_name += "/" + datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
 
-    def _optim_step(self, loss: Tensor, optim: LightningOptimizer):
-        optim.zero_grad()
-        self.manual_backward(loss)
-        optim.step()
+        if config.spectral_norm_d:
+            apply_spectral_normalization(D)
+        if config.spectral_norm_g:
+            apply_spectral_normalization(G)
 
-    def configure_optimizers(self):
-        optim_cls = getattr(torch.optim, self.hparams["optimizer"])
-        kwargs = dict(weight_decay=self.hparams["weight_decay"])
-        if self.hparams["optimizer"] in ("Adam", "AdamW"):
-            kwargs.update(betas=(self.hparams["beta1"], self.hparams["beta2"]))
+        optim_d, optim_g = self.build_optimizers(config, D, G)
 
-        optim_d = optim_cls(self.discriminator.parameters(), lr=self.hparams["lr_d"], **kwargs)
+        accelerator = Accelerator(log_with="tensorboard", logging_dir="logs")
+        accelerator.init_trackers(config.log_name, vars(config))
+        accelerator.print(config)
+        D, G, optim_d, optim_g = accelerator.prepare(D, G, optim_d, optim_g)
+        if accelerator.distributed_type == "MULTI_GPU":
+            D, G = map(nn.SyncBatchNorm.convert_sync_batchnorm, (D, G))
+        if accelerator.is_main_process:
+            fixed_z = torch.randn(40, config.z_dim, device=accelerator.device)
+        else:
+            fixed_z = None
 
-        if hasattr(self.generator, "mapping_network"):  # stylegan
-            group1 = [p for name, p in self.generator.named_parameters() if not name.startswith("mapping_network.")]
-            group2 = list(self.generator.mapping_network.parameters())
-            assert len(group1) + len(group2) == len(list(self.generator.parameters()))
+        self.config = config
+        self.accelerator = accelerator
+        self.D = D
+        self.G = G
+        self.optim_d = optim_d
+        self.optim_g = optim_g
+        self.fixed_z = fixed_z
+
+    @staticmethod
+    def build_optimizers(config: GANTrainerConfig, D: nn.Module, G: nn.Module):
+        optim_cls = getattr(torch.optim, config.optimizer)
+        kwargs = dict(weight_decay=config.weight_decay)
+        if config.optimizer in ("Adam", "AdamW"):
+            kwargs.update(betas=(config.beta1, config.beta2))
+
+        optim_d = optim_cls(D.parameters(), lr=config.lr_d, **kwargs)
+
+        if hasattr(G, "mapping_network"):  # stylegan
+            group1 = [p for name, p in G.named_parameters() if not name.startswith("mapping_network.")]
+            group2 = list(G.mapping_network.parameters())
+            assert len(group1) + len(group2) == len(list(G.parameters()))
             param_groups = [
                 dict(params=group1),
-                dict(params=group2, lr=self.hparams["lr_g"] / 100),
+                dict(params=group2, lr=config.lr_g / 100),
             ]
             optim_g = optim_cls(param_groups, **kwargs)
         else:
-            param_groups = [dict(params=list(self.generator.parameters()))]
-        optim_g = optim_cls(param_groups, lr=self.hparams["lr_g"], **kwargs)
+            param_groups = [dict(params=list(G.parameters()))]
+        optim_g = optim_cls(param_groups, lr=config.lr_g, **kwargs)
 
         return optim_d, optim_g
 
-    def training_step(self, batch: Tuple[Tensor, Tensor], batch_idx: int):
-        x_reals, ys = batch
-        optim_d, optim_g = self.optimizers()
-        bsize = x_reals.size(0)
-        method = self.hparams["method"]
-        conditional = self.hparams["conditional"]
+    def train(self, dloader: DataLoader):
+        dloader = self.accelerator.prepare(dloader)
+        step, finished = 0, False
 
-        # train D
-        if conditional:
-            with torch.no_grad():
-                x_fakes = self.generate(bsize, ys)
-            d_reals = self.discriminator(x_reals, ys)
-            d_fakes = self.discriminator(x_fakes, ys)
-        else:
-            with torch.no_grad():
-                x_fakes = self.generate(bsize)
-            d_reals = self.discriminator(x_reals)
-            d_fakes = self.discriminator(x_fakes)
+        for epoch in itertools.count():
+            pbar = tqdm(dloader, desc=f"Epoch {epoch}") if self.accelerator.is_main_process else dloader
+            for x_reals, ys in pbar:
+                step += 1
+                log_dict = dict(epoch=epoch)
+
+                loss_d = self.train_D_step(x_reals, ys)
+                log_dict["loss/d"] = loss_d.item()
+
+                if step % self.config.train_g_interval == 0:
+                    loss_g = self.train_G_step(x_reals, ys)
+                    log_dict["loss/g"] = loss_g.item()
+
+                self.accelerator.log(log_dict, step=step)
+                if step % self.config.log_img_interval == 0:
+                    self.log_images(step)
+                
+                if step >= self.config.n_steps:
+                    finished = True
+                    break
+
+            if finished:
+                break
+        
+        self.accelerator.end_training()
+
+    def _D_forward(self, x_reals: Tensor, ys: Tensor) -> Tensor:
+        return self.D(x_reals, ys) if self.config.conditional else self.D(x_reals)
+
+    def _generate(self, bsize: int, ys: Tensor) -> Tensor:
+        z_noise = torch.randn(bsize, self.config.z_dim, device=self.accelerator.device)
+        return self.G(z_noise, ys) if self.config.conditional else self.G(z_noise)
+
+    def train_D_step(self, x_reals: Tensor, ys: Tensor):
+        bsize = x_reals.shape[0]
+        method = self.config.method
+
+        with torch.no_grad():
+            x_fakes = self._generate(bsize, ys)
+        d_reals = self._D_forward(x_reals, ys)
+        d_fakes = self._D_forward(x_fakes, ys)
 
         if method == "gan":
-            loss_d_real = -F.logsigmoid(d_reals).mean() * (1.0 - self.hparams["label_smoothing"])
+            loss_d_real = -F.logsigmoid(d_reals).mean() * (1.0 - self.config.label_smoothing)
             loss_d_fake = -F.logsigmoid(-d_fakes).mean()
             loss_d = loss_d_real + loss_d_fake
 
@@ -116,88 +156,63 @@ class GANSystem(pl.LightningModule):
             loss_d = d_fakes.mean() - d_reals.mean()
 
             if method == "wgan-gp":
-                alpha = torch.rand(bsize, 1, 1, 1, device=self.device)
+                alpha = torch.rand(bsize, 1, 1, 1, device=x_reals.device)
                 x_inters = (x_reals * alpha + x_fakes * (1 - alpha)).requires_grad_()
-                d_inters = self.discriminator(x_inters, ys) if conditional else self.discriminator(x_inters)
+                d_inters = self._D_forward(x_inters, ys)
 
                 (d_grad,) = torch.autograd.grad(d_inters, x_inters, torch.ones_like(d_inters), create_graph=True)
                 d_grad_norm = torch.linalg.vector_norm(d_grad, dim=(1, 2, 3))
-                loss_d = loss_d + self.hparams["lamb"] * ((d_grad_norm - 1) ** 2).mean()
+                loss_d = loss_d + self.config.lamb * ((d_grad_norm - 1) ** 2).mean()
 
         elif method == "hinge":
             loss_d = F.relu(1 - d_reals).mean() + F.relu(1 + d_fakes).mean()
 
         else:
-            raise ValueError
+            raise ValueError(f"Unsupported method {method}")
 
-        self._optim_step(loss_d, optim_d)
-        self.log("loss_d", loss_d)
+        self.optim_d.zero_grad(set_to_none=True)
+        self.accelerator.backward(loss_d)
+        self.optim_d.step()
 
         # Algorithm 1 in paper clip weights after optimizer step, but GitHub code clip before optimizer step
         # it doesn't seem to matter much in practice
         if method == "wgan":
-            clip = self.hparams["clip"]
+            clip = self.config.clip
             with torch.no_grad():
-                for param in self.discriminator.parameters():
+                for param in self.D.parameters():
                     param.clip_(-clip, clip)
 
-        # train G
-        if (batch_idx + 1) % self.hparams["train_g_interval"] == 0:
-            self.discriminator.requires_grad_(False)
+        return loss_d
 
-            if conditional:
-                x_fakes = self.generate(bsize, ys)
-                d_fakes = self.discriminator(x_fakes, ys)
-            else:
-                x_fakes = self.generate(bsize)
-                d_fakes = self.discriminator(x_fakes)
+    def train_G_step(self, x_reals: Tensor, ys: Tensor):
+        bsize = x_reals.shape[0]
+        method = self.config.method
+        self.D.requires_grad_(False)
 
-            if method == "gan":
-                loss_g = -F.logsigmoid(d_fakes).mean()
+        x_fakes = self._generate(bsize, ys)
+        d_fakes = self._D_forward(x_fakes, ys)
 
-            elif method in ("wgan", "wgan-gp", "hinge"):
-                loss_g = -d_fakes.mean()
+        if method == "gan":
+            loss_g = -F.logsigmoid(d_fakes).mean()
 
-            else:
-                raise ValueError
+        elif method in ("wgan", "wgan-gp", "hinge"):
+            loss_g = -d_fakes.mean()
 
-            self._optim_step(loss_g, optim_g)
-            self.log("loss_g", loss_g)
+        else:
+            raise ValueError(f"Unsupported method {method}")
 
-            self.discriminator.requires_grad_(True)
+        self.optim_g.zero_grad(set_to_none=True)
+        self.accelerator.backward(loss_g)
+        self.optim_g.step()
 
-    def validation_step(self, batch: Tuple[Tensor, Tensor], batch_idx: int):
-        pass
-
-
-class ImageLoggingCallback(pl.Callback):
-    def __init__(self, log_interval: int, fixed_noise: Tensor, fixed_y: Optional[Tensor] = None):
-        super().__init__()
-        self.log_interval = log_interval
-        self.fixed_noise = fixed_noise
-        self.fixed_y = fixed_y
+        self.D.requires_grad_(True)
+        return loss_g
 
     @torch.no_grad()
-    def _log_images(self, pl_module: GANSystem):
-        generator = pl_module.generator
-        logger = pl_module.logger
-        global_step = pl_module.global_step
-        conditional = pl_module.hparams["conditional"]
-
-        images = generator(self.fixed_noise, self.fixed_y) if conditional else generator(self.fixed_noise)
-        images = images.mul_(0.5).add_(0.5)
-        if isinstance(logger, TensorBoardLogger):
-            logger.experiment.add_images("generated", images, global_step)
-        elif isinstance(logger, WandbLogger):
-            logger.log_image("generated", images)
-
-    def on_train_start(self, trainer: pl.Trainer, pl_module: GANSystem) -> None:
-        if trainer.is_global_zero:
-            self.fixed_noise = self.fixed_noise.to(pl_module.device)
-            if self.fixed_y is not None:
-                self.fixed_y = self.fixed_y.to(pl_module.device)
-            self._log_images(pl_module)
-
-    def on_train_batch_end(self, trainer: pl.Trainer, pl_module: GANSystem, *args) -> None:
-        if trainer.is_global_zero and pl_module.global_step % self.log_interval == 0:
-            self._log_images(pl_module)
+    def log_images(self, step: int):
+        accel = self.accelerator
+        if accel.is_main_process:
+            x_fakes = self.G(self.fixed_z)
+            x_fakes = x_fakes.mul_(0.5).add_(0.5)
+            logger = accel.get_tracker("tensorboard")
+            logger.add_images("generated", x_fakes, step)
