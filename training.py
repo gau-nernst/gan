@@ -20,6 +20,10 @@ def apply_spectral_normalization(module: nn.Module):
             apply_spectral_normalization(child)
 
 
+def count_params(module: nn.Module) -> int:
+    return sum(p.numel() for p in module.parameters())
+
+
 @dataclass
 class GANTrainerConfig:
     conditional: bool = False
@@ -44,7 +48,7 @@ class GANTrainerConfig:
 
 
 class GANTrainer:
-    def __init__(self, D: nn.Module, G: nn.Module, config: GANTrainerConfig):
+    def __init__(self, config: GANTrainerConfig, D: nn.Module, G: nn.Module, fixed_z: Tensor, fixed_y: Tensor):
         assert config.clip > 0
         config = copy.deepcopy(config)
         config.lr_d = config.lr_d or config.lr
@@ -61,13 +65,14 @@ class GANTrainer:
         accelerator = Accelerator(log_with="tensorboard", logging_dir="logs")
         accelerator.init_trackers(config.log_name, vars(config))
         accelerator.print(config)
+        accelerator.print(D)
+        accelerator.print(G)
+        accelerator.print(f"D: {count_params(D)/1e6:.2f}M params")
+        accelerator.print(f"G: {count_params(G)/1e6:.2f}M params")
+
         D, G, optim_d, optim_g = accelerator.prepare(D, G, optim_d, optim_g)
         if accelerator.distributed_type == "MULTI_GPU":
             D, G = map(nn.SyncBatchNorm.convert_sync_batchnorm, (D, G))
-        if accelerator.is_main_process:
-            fixed_z = torch.randn(40, config.z_dim, device=accelerator.device)
-        else:
-            fixed_z = None
 
         self.config = config
         self.accelerator = accelerator
@@ -75,7 +80,8 @@ class GANTrainer:
         self.G = G
         self.optim_d = optim_d
         self.optim_g = optim_g
-        self.fixed_z = fixed_z
+        self.fixed_z = fixed_z.to(accelerator.device) if accelerator.is_main_process else None
+        self.fixed_y = fixed_y.to(accelerator.device) if accelerator.is_main_process else None
 
     @staticmethod
     def build_optimizers(config: GANTrainerConfig, D: nn.Module, G: nn.Module):
@@ -104,6 +110,7 @@ class GANTrainer:
     def train(self, dloader: DataLoader):
         dloader = self.accelerator.prepare(dloader)
         step, finished = 0, False
+        self.log_images(step)
 
         for epoch in itertools.count():
             pbar = tqdm(dloader, desc=f"Epoch {epoch}") if self.accelerator.is_main_process else dloader
@@ -121,21 +128,20 @@ class GANTrainer:
                 self.accelerator.log(log_dict, step=step)
                 if step % self.config.log_img_interval == 0:
                     self.log_images(step)
-                
+
                 if step >= self.config.n_steps:
                     finished = True
                     break
 
             if finished:
                 break
-        
+
         self.accelerator.end_training()
 
     def _D_forward(self, x_reals: Tensor, ys: Tensor) -> Tensor:
         return self.D(x_reals, ys) if self.config.conditional else self.D(x_reals)
 
-    def _generate(self, bsize: int, ys: Tensor) -> Tensor:
-        z_noise = torch.randn(bsize, self.config.z_dim, device=self.accelerator.device)
+    def _G_forward(self, z_noise: Tensor, ys: Tensor) -> Tensor:
         return self.G(z_noise, ys) if self.config.conditional else self.G(z_noise)
 
     def train_D_step(self, x_reals: Tensor, ys: Tensor):
@@ -143,7 +149,8 @@ class GANTrainer:
         method = self.config.method
 
         with torch.no_grad():
-            x_fakes = self._generate(bsize, ys)
+            z_noise = torch.randn(bsize, self.config.z_dim, device=self.accelerator.device)
+            x_fakes = self._G_forward(z_noise, ys)
         d_reals = self._D_forward(x_reals, ys)
         d_fakes = self._D_forward(x_fakes, ys)
 
@@ -189,7 +196,8 @@ class GANTrainer:
         method = self.config.method
         self.D.requires_grad_(False)
 
-        x_fakes = self._generate(bsize, ys)
+        z_noise = torch.randn(bsize, self.config.z_dim, device=self.accelerator.device)
+        x_fakes = self._G_forward(z_noise, ys)
         d_fakes = self._D_forward(x_fakes, ys)
 
         if method == "gan":
@@ -208,11 +216,11 @@ class GANTrainer:
         self.D.requires_grad_(True)
         return loss_g
 
-    @torch.no_grad()
+    @torch.inference_mode()
     def log_images(self, step: int):
         accel = self.accelerator
         if accel.is_main_process:
-            x_fakes = self.G(self.fixed_z)
+            x_fakes = self._G_forward(self.fixed_z, self.fixed_y)
             x_fakes = x_fakes.mul_(0.5).add_(0.5)
             logger = accel.get_tracker("tensorboard")
             logger.add_images("generated", x_fakes, step)
