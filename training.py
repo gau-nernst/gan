@@ -93,7 +93,7 @@ class GANTrainer:
         self.G = G
         self.optim_d = optim_d
         self.optim_g = optim_g
-        self.G_ema = EMA(accelerator.unwrap_model(G), config.ema_decay) if config.ema and rank_zero else None
+        self.G_ema = EMA(G, config.ema_decay) if config.ema and rank_zero else None
         self.fixed_z = fixed_z.to(accelerator.device) if rank_zero else None
         self.fixed_y = fixed_y.to(accelerator.device) if rank_zero else None
 
@@ -240,7 +240,9 @@ class GANTrainer:
         logger.add_images("generated", x_fakes, step)
 
         if self.G_ema is not None:
-            x_fakes = self._forward(self.G_ema, self.fixed_z, self.fixed_y).mul_(0.5).add_(0.5)
+            self.G_ema.load_ema_state_dict()
+            x_fakes = self._forward(self.G, self.fixed_z, self.fixed_y).mul_(0.5).add_(0.5)
+            self.G_ema.unload_ema_state_dict()
             logger.add_images("generated/ema", x_fakes, step)
 
 
@@ -249,7 +251,8 @@ class EMA(nn.Module):
     def __init__(self, model: nn.Module, ema_decay: float, warmup: int = 100):
         super().__init__()
         self.model = model
-        self.ema_model = copy.deepcopy(model)
+        self.ema_state_dict = copy.deepcopy(model.state_dict())
+        self._temp_state_dict = None
         self.ema_decay = ema_decay
         self.warmup = warmup
         self.counter = 0
@@ -260,12 +263,20 @@ class EMA(nn.Module):
         if self.counter <= self.warmup:
             return
 
-        for name, param in self.model.named_parameters():
-            if param.dtype is torch.long:
-                continue
-            ema_param = self.ema_model.get_parameter(name)
-            diff = param - ema_param
-            ema_param.add_(diff.mul_(1 - self.ema_decay))
+        for name, param in self.model.state_dict().items():
+            ema_param = self.ema_state_dict[name]
+            if param.dtype is torch.long:   # usually these are counters
+                ema_param.copy_(param)
+            else:
+                diff = param - ema_param
+                ema_param.add_(diff.mul_(1 - self.ema_decay))
 
-    def forward(self, *args, **kwargs):
-        return self.ema_model(*args, **kwargs)
+    def load_ema_state_dict(self):
+        # 3 versions of state_dict are stored in GPU memory
+        self._temp_state_dict = copy.deepcopy(self.model.state_dict())
+        self.model.load_state_dict(self.ema_state_dict)
+
+    def unload_ema_state_dict(self):
+        assert self._temp_state_dict is not None
+        self.model.load_state_dict(self._temp_state_dict)
+        self._temp_state_dict = None
