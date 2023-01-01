@@ -40,6 +40,7 @@ def cls_from_args(args: argparse.Namespace, cls):
 def get_parser():
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", default="dcgan")
+    parser.add_argument("--base_depth", type=int)
     parser.add_argument("--batch_size", type=int, default=32)
     parser.add_argument("--num_workers", type=int, default=8)
     parser.add_argument("--img_size", type=int, default=64)
