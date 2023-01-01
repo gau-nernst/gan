@@ -21,7 +21,7 @@ class Discriminator(nn.Module):
         img_depth: int = 3,
         smallest_map_size: int = 4,
         base_depth: int = 64,
-        norm: _Norm = nn.BatchNorm2d,
+        norm: _Norm = partial(nn.BatchNorm2d, track_running_stats=False),
         act: _Act = partial(nn.LeakyReLU, 0.2, True),
     ):
         assert img_size >= 4 and math.log2(img_size).is_integer()
@@ -59,7 +59,7 @@ class Generator(nn.Module):
         z_dim: int = 128,
         smallest_map_size: int = 4,
         base_depth: int = 64,
-        norm: _Norm = nn.BatchNorm2d,
+        norm: _Norm = partial(nn.BatchNorm2d, track_running_stats=False),
         act: _Act = partial(nn.ReLU, True),
     ):
         assert img_size >= 4 and math.log2(img_size).is_integer()

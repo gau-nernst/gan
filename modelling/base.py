@@ -21,7 +21,7 @@ def conv_norm_act(
     bias: bool = True,
     order: Optional[List[Literal["conv", "norm", "act"]]] = None,
     conv: _Conv = nn.Conv2d,
-    norm: Optional[_Norm] = nn.BatchNorm2d,
+    norm: Optional[_Norm] = partial(nn.BatchNorm2d, track_running_stats=False),
     act: Optional[_Act] = partial(nn.ReLU, inplace=True),
 ):
     if order is None:

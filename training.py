@@ -7,6 +7,7 @@ from typing import Literal, Optional
 import torch
 import torch.nn.functional as F
 from accelerate import Accelerator
+from accelerate.state import AcceleratorState
 from torch import Tensor, nn
 from torch.utils.data import DataLoader
 from tqdm import tqdm
@@ -18,6 +19,12 @@ def apply_spectral_normalization(module: nn.Module):
             setattr(module, name, nn.utils.parametrizations.spectral_norm(child))
         else:
             apply_spectral_normalization(child)
+
+
+def bn_not_track_running_stats(module: nn.Module):
+    for m in module.modules():
+        if isinstance(m, nn.modules.batchnorm._BatchNorm):
+            m.track_running_stats = False
 
 
 def count_params(module: nn.Module) -> int:
@@ -43,6 +50,8 @@ class GANTrainerConfig:
     beta1: float = 0.5
     beta2: float = 0.999
     n_steps: int = 10000
+    ema: bool = False
+    ema_decay: float = 0.999
     log_name: str = "gan"
     log_img_interval: int = 1000
 
@@ -65,6 +74,7 @@ class GANTrainer:
         accelerator = Accelerator(log_with="tensorboard", logging_dir="logs")
         accelerator.init_trackers(config.log_name, vars(config))
         accelerator.print(config)
+        accelerator.print(AcceleratorState())
         accelerator.print(D)
         accelerator.print(G)
         accelerator.print(f"D: {count_params(D)/1e6:.2f}M params")
@@ -72,7 +82,10 @@ class GANTrainer:
 
         D, G, optim_d, optim_g = accelerator.prepare(D, G, optim_d, optim_g)
         if accelerator.distributed_type == "MULTI_GPU":
-            D, G = map(nn.SyncBatchNorm.convert_sync_batchnorm, (D, G))
+            bn_not_track_running_stats(D)
+            bn_not_track_running_stats(G)
+
+        rank_zero = accelerator.is_main_process
 
         self.config = config
         self.accelerator = accelerator
@@ -80,8 +93,9 @@ class GANTrainer:
         self.G = G
         self.optim_d = optim_d
         self.optim_g = optim_g
-        self.fixed_z = fixed_z.to(accelerator.device) if accelerator.is_main_process else None
-        self.fixed_y = fixed_y.to(accelerator.device) if accelerator.is_main_process else None
+        self.G_ema = EMA(accelerator.unwrap_model(G), config.ema_decay) if config.ema and rank_zero else None
+        self.fixed_z = fixed_z.to(accelerator.device) if rank_zero else None
+        self.fixed_y = fixed_y.to(accelerator.device) if rank_zero else None
 
     @staticmethod
     def build_optimizers(config: GANTrainerConfig, D: nn.Module, G: nn.Module):
@@ -125,6 +139,9 @@ class GANTrainer:
                     loss_g = self.train_G_step(x_reals, ys)
                     log_dict["loss/g"] = loss_g.item()
 
+                    if self.G_ema is not None:
+                        self.G_ema.update()
+
                 self.accelerator.log(log_dict, step=step)
                 if step % self.config.log_img_interval == 0:
                     self.log_images(step)
@@ -138,11 +155,8 @@ class GANTrainer:
 
         self.accelerator.end_training()
 
-    def _D_forward(self, x_reals: Tensor, ys: Tensor) -> Tensor:
-        return self.D(x_reals, ys) if self.config.conditional else self.D(x_reals)
-
-    def _G_forward(self, z_noise: Tensor, ys: Tensor) -> Tensor:
-        return self.G(z_noise, ys) if self.config.conditional else self.G(z_noise)
+    def _forward(self, m: nn.Module, xs: Tensor, ys: Tensor) -> Tensor:
+        return m(xs, ys) if self.config.conditional else m(xs)
 
     def train_D_step(self, x_reals: Tensor, ys: Tensor):
         bsize = x_reals.shape[0]
@@ -150,9 +164,9 @@ class GANTrainer:
 
         with torch.no_grad():
             z_noise = torch.randn(bsize, self.config.z_dim, device=self.accelerator.device)
-            x_fakes = self._G_forward(z_noise, ys)
-        d_reals = self._D_forward(x_reals, ys)
-        d_fakes = self._D_forward(x_fakes, ys)
+            x_fakes = self._forward(self.G, z_noise, ys)
+        d_reals = self._forward(self.D, x_reals, ys)
+        d_fakes = self._forward(self.D, x_fakes, ys)
 
         if method == "gan":
             loss_d_real = -F.logsigmoid(d_reals).mean() * (1.0 - self.config.label_smoothing)
@@ -165,7 +179,7 @@ class GANTrainer:
             if method == "wgan-gp":
                 alpha = torch.rand(bsize, 1, 1, 1, device=x_reals.device)
                 x_inters = (x_reals * alpha + x_fakes * (1 - alpha)).requires_grad_()
-                d_inters = self._D_forward(x_inters, ys)
+                d_inters = self._forward(self.D, x_inters, ys)
 
                 (d_grad,) = torch.autograd.grad(d_inters, x_inters, torch.ones_like(d_inters), create_graph=True)
                 d_grad_norm = torch.linalg.vector_norm(d_grad, dim=(1, 2, 3))
@@ -197,8 +211,8 @@ class GANTrainer:
         self.D.requires_grad_(False)
 
         z_noise = torch.randn(bsize, self.config.z_dim, device=self.accelerator.device)
-        x_fakes = self._G_forward(z_noise, ys)
-        d_fakes = self._D_forward(x_fakes, ys)
+        x_fakes = self._forward(self.G, z_noise, ys)
+        d_fakes = self._forward(self.D, x_fakes, ys)
 
         if method == "gan":
             loss_g = -F.logsigmoid(d_fakes).mean()
@@ -218,9 +232,40 @@ class GANTrainer:
 
     @torch.inference_mode()
     def log_images(self, step: int):
-        accel = self.accelerator
-        if accel.is_main_process:
-            x_fakes = self._G_forward(self.fixed_z, self.fixed_y)
-            x_fakes = x_fakes.mul_(0.5).add_(0.5)
-            logger = accel.get_tracker("tensorboard")
-            logger.add_images("generated", x_fakes, step)
+        if not self.accelerator.is_main_process:
+            return
+        logger = self.accelerator.get_tracker("tensorboard")
+
+        x_fakes = self._forward(self.G, self.fixed_z, self.fixed_y).mul_(0.5).add_(0.5)
+        logger.add_images("generated", x_fakes, step)
+
+        if self.G_ema is not None:
+            x_fakes = self._forward(self.G_ema, self.fixed_z, self.fixed_y).mul_(0.5).add_(0.5)
+            logger.add_images("generated/ema", x_fakes, step)
+
+
+# reference: https://github.com/lucidrains/ema-pytorch
+class EMA(nn.Module):
+    def __init__(self, model: nn.Module, ema_decay: float, warmup: int = 100):
+        super().__init__()
+        self.model = model
+        self.ema_model = copy.deepcopy(model)
+        self.ema_decay = ema_decay
+        self.warmup = warmup
+        self.counter = 0
+
+    @torch.no_grad()
+    def update(self):
+        self.counter += 1
+        if self.counter <= self.warmup:
+            return
+
+        for name, param in self.model.named_parameters():
+            if param.dtype is torch.long:
+                continue
+            ema_param = self.ema_model.get_parameter(name)
+            diff = param - ema_param
+            ema_param.add_(diff.mul_(1 - self.ema_decay))
+
+    def forward(self, *args, **kwargs):
+        return self.ema_model(*args, **kwargs)

@@ -139,7 +139,7 @@ class GeneratorStage(nn.Module):
         in_dim: int,
         out_dim: int,
         y_dim: Optional[int] = None,
-        norm: _Norm = nn.BatchNorm2d,
+        norm: _Norm = partial(nn.BatchNorm2d, track_running_stats=False),
         act: _Act = partial(nn.ReLU, True),
     ):
         super().__init__()
@@ -185,7 +185,7 @@ class Generator(nn.Module):
         smallest_map_size: int = 4,
         base_depth: int = 32,
         self_attention_sizes: Optional[List[int]] = None,
-        norm: _Norm = nn.BatchNorm2d,
+        norm: _Norm = partial(nn.BatchNorm2d, track_running_stats=False),
         act: _Act = partial(nn.ReLU, True),
     ):
         if self_attention_sizes is None:
