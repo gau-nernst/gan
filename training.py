@@ -127,7 +127,7 @@ class GANTrainer:
         self.log_images(step)
 
         for epoch in itertools.count():
-            pbar = tqdm(dloader, desc=f"Epoch {epoch}") if self.accelerator.is_main_process else dloader
+            pbar = tqdm(dloader, desc=f"Epoch {epoch}", leave=False) if self.accelerator.is_main_process else dloader
             for x_reals, ys in pbar:
                 step += 1
                 log_dict = dict(epoch=epoch)

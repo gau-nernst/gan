@@ -43,7 +43,8 @@ class GeneratorBlock(nn.Module):
         self.noise_weight = nn.Parameter(torch.zeros(1, out_dim, 1, 1))  # B in paper
         self.act = act()
         self.norm = norm(out_dim)
-        self.style_map = nn.Linear(w_dim, out_dim * 2)  # A in paper
+        self.style_weight = nn.Linear(w_dim, out_dim)  # A in paper
+        self.style_bias = nn.Linear(w_dim, out_dim)
 
     def forward(self, imgs: Tensor, w_embs: Tensor, noise: Optional[Tensor] = None):
         imgs = self.conv(imgs)
@@ -52,8 +53,9 @@ class GeneratorBlock(nn.Module):
         noise = noise or torch.randn(b, 1, h, w, device=imgs.device)
         imgs = self.act(imgs + noise * self.noise_weight)
 
-        style = self.style_map(w_embs).view(b, -1, 1, 1)
-        return self.norm(imgs) * style[:, :c].add(1) + style[:, c:]
+        style_weight = self.style_weight(w_embs).view(b, -1, 1, 1) + 1
+        style_bias = self.style_bias(w_embs).view(b, -1, 1, 1)
+        return self.norm(imgs) * style_weight + style_bias
 
 
 class Generator(nn.Module):

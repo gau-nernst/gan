@@ -9,9 +9,9 @@ Features:
   - Hinge loss
 - Architectures
   - DCGAN
-  - NVIDIA GANs (WIP): Progressive GAN, StyleGAN, StyleGAN2
+  - NVIDIA GANs: Progressive GAN, StyleGAN, StyleGAN2 (progressive growing is not implemented)
   - Conditional GAN
-  - SA-GAN (WIP): no conditional generation yet
+  - SA-GAN
   - BigGAN (TODO)
 
 ## Usage
@@ -47,4 +47,5 @@ Some lessons I have learned from implementing and training GANs:
 - Provide label information helps with GAN training. I didn't try modifying Discriminator to classify all classes + fake (suggested by [(Salimans, 2016)](https://proceedings.neurips.cc/paper/2016/hash/8a3363abe792db2d8761d6403605aeb7-Abstract.html)), but Conditional GAN seems to speed up convergence. Conditional GAN probably prevents mode collapse also.
 - Progressive GAN: I don't implement progressive growing. Training at 64x64, using most of the training details from the paper, Discriminator outputs explode without Discriminator output L2 penalty (section A.1). The paper also used EMA on Generator, but I haven't tried.
 - StyleGAN: mini-batch standard deviation in Discriminator and beta1=0 seem to be important. Tanh is not used in Generator (to force values in [-1,1])
+- SA-GAN: Generator uses Conditional Batch Norm for conditional generation, which follows [Miyato 2018](https://arxiv.org/abs/1802.05637). BigGAN, which extends SA-GAN, does not change this aspect. There is no evidence yet, but I think Conditional / Adaptive Instance Norm should be better (StyleGAN's approach).
 - EMA of the Generator is extremely beneficial. Training DCGAN on CelebA, EMA reduces strange artifacts, makes the generated images smoother and more coherent. [Yazıc 2019](https://arxiv.org/abs/1806.04498) studies this effect. NVIDIA GANs (Progressive GAN, StyleGAN series) and BigGAN use EMA.

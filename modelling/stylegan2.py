@@ -14,7 +14,11 @@ import torch.nn.functional as F
 from torch import Tensor, nn
 
 from .base import _Act
-from .progressive_gan import Blur, Discriminator, init_weights
+from .progressive_gan import Blur
+from .progressive_gan import Discriminator as _Discriminator
+from .progressive_gan import init_weights
+
+Discriminator = partial(_Discriminator, residual=True)
 
 
 class GeneratorBlock(nn.Module):
@@ -37,7 +41,7 @@ class GeneratorBlock(nn.Module):
 
         self.conv = nn.Conv2d(in_dim, out_dim, kernel_size)
         self.noise_weight = nn.Parameter(torch.tensor(0.0))  # B in paper
-        self.style_map = nn.Linear(w_dim, in_dim)  # A in paper
+        self.style_weight = nn.Linear(w_dim, in_dim)  # A in paper
         self.act = act() if act is not None else nn.Identity()
 
     def forward(self, imgs: Tensor, w_embs: Tensor, noise: Optional[Tensor] = None):
@@ -47,7 +51,7 @@ class GeneratorBlock(nn.Module):
         out_dim, in_dim, ky, kx = self.conv.weight.shape
 
         # modulation
-        style = self.style_map(w_embs).add(1).view(b, 1, c, 1, 1)
+        style = self.style_weight(w_embs).view(b, 1, c, 1, 1) + 1
         weight = self.conv.weight.unsqueeze(0) * style
         weight = weight.view(b * out_dim, in_dim, ky, kx)
         if self.demodulation:
@@ -119,11 +123,11 @@ class Generator(nn.Module):
         w_embs = self.mapping_network(z_embs)
         x = self.learned_input.expand(z_embs.size(0), -1, -1, -1)
         y = 0
-        for layer in self.layers:
+        for i, layer in enumerate(self.layers):
             if not layer.demodulation:  # to_rgb layer
-                if isinstance(y, Tensor):
-                    y = self.upsample_blur(y)
                 y = y + layer(x, w_embs)
+                if i < len(self.layers) - 1:
+                    y = self.upsample_blur(y)
             else:
                 x = layer(x, w_embs)
         return y

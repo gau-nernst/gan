@@ -5,6 +5,10 @@
 # - q, k, v have bottlenecked embedding dimension
 # - k and v have reduced spatial resolution
 #
+# For conditional generation
+# - Discriminator: Projection Discrinator - https://arxiv.org/abs/1802.05637
+# - Generator: Conditional Batch Norm - https://arxiv.org/abs/1707.00683
+#
 # Code reference:
 # https://github.com/brain-research/self-attention-gan
 # https://github.com/ajbrock/BigGAN-PyTorch
@@ -16,18 +20,28 @@ import torch
 import torch.nn.functional as F
 from torch import Tensor, nn
 
-from .base import _Act, _Norm, conv1x1, conv3x3
+from .base import _Act, conv1x1, conv3x3
+
+_Layer = Callable[[int, int], nn.Module]
 
 
-class Style(nn.Module):
-    def __init__(self, y_dim: int, dim: int, layer: Callable[[int, int], nn.Module] = nn.Embedding):
+class ConditionalBatchNorm2d(nn.Module):
+    def __init__(self, dim: int, y_dim: Optional[int] = None, y_layer_factory: _Layer = nn.Embedding):
         super().__init__()
-        self.proj = layer(y_dim, dim * 2)
+        self.bn = nn.BatchNorm2d(dim, affine=y_dim is None, track_running_stats=False)
+        self.weight = self.bias = None
+        if y_dim is not None:
+            self.weight = y_layer_factory(y_dim, dim)
+            self.bias = y_layer_factory(y_dim, dim)
 
     def forward(self, imgs: Tensor, ys: Tensor):
-        b = imgs.shape[0]
-        weight, bias = torch.chunk(self.proj(ys).view(b, -1, 1, 1), 2, dim=1)
-        return imgs * weight + bias
+        imgs = self.bn(imgs)
+        if self.weight is not None and self.bias is not None:
+            b = imgs.shape[0]
+            weight = self.weight(ys).view(b, -1, 1, 1)
+            bias = self.bias(ys).view(b, -1, 1, 1)
+            imgs = imgs * weight + bias
+        return imgs
 
 
 class SelfAttentionConv2d(nn.Module):
@@ -72,7 +86,8 @@ class DiscriminatorBlock(nn.Module):
             conv3x3(out_dim, out_dim),
             nn.AvgPool2d(2) if downsample else nn.Identity(),
         )
-        # NOTE: avg_pool + 1x1 conv is equivalent to 1x1 conv + avg_pool, but the former should be faster
+        # avg_pool + 1x1 conv is equivalent to 1x1 conv + avg_pool
+        # but the former is faster
         if downsample:
             self.shortcut = nn.Sequential(nn.AvgPool2d(2), conv1x1(in_dim, out_dim))
         elif out_dim != in_dim:
@@ -93,6 +108,7 @@ class Discriminator(nn.Module):
         smallest_map_size: int = 4,
         base_depth: int = 32,
         self_attention_sizes: Optional[List[int]] = None,
+        y_layer_factory: _Layer = nn.Embedding,
         act: _Act = partial(nn.ReLU, True),
     ):
         if self_attention_sizes is None:
@@ -115,7 +131,7 @@ class Discriminator(nn.Module):
         self.layers.append(act())
         self.layers.append(nn.AvgPool2d(4))  # official implementation uses sum
 
-        self.y_layer = nn.Embedding(y_dim, base_depth) if y_dim is not None else None
+        self.y_layer = y_layer_factory(y_dim, base_depth) if y_dim is not None else None
         self.out_layer = conv1x1(base_depth, 1)
 
         self.reset_parameters()
@@ -127,6 +143,7 @@ class Discriminator(nn.Module):
         embs = self.layers(imgs)
         logits = self.out_layer(embs).view(-1)
         if self.y_layer is not None:
+            # projection Discriminator
             b = imgs.shape[0]
             y_logits = torch.bmm(embs.view(b, 1, -1), self.y_layer(ys).view(b, -1, 1))
             logits = logits + y_logits.view(b)
@@ -139,36 +156,33 @@ class GeneratorStage(nn.Module):
         in_dim: int,
         out_dim: int,
         y_dim: Optional[int] = None,
-        norm: _Norm = partial(nn.BatchNorm2d, track_running_stats=False),
+        y_layer_factory: _Layer = nn.Embedding,
         act: _Act = partial(nn.ReLU, True),
     ):
         super().__init__()
-        if y_dim is not None:  # override affine=False for conditional generation
-            norm = partial(norm, affine=False)
+        norm = partial(ConditionalBatchNorm2d, y_dim=y_dim, y_layer_factory=y_layer_factory)
         self.layers = nn.ModuleList()
 
         self.layers.append(norm(in_dim))
-        if y_dim is not None:
-            self.layers.append(Style(y_dim, in_dim))
         self.layers.append(act())
         self.layers.append(nn.Upsample(scale_factor=2.0))
         self.layers.append(conv3x3(in_dim, out_dim, bias=False))
 
         self.layers.append(norm(out_dim))
-        if y_dim is not None:
-            self.layers.append(Style(y_dim, out_dim))
         self.layers.append(act())
         self.layers.append(conv3x3(out_dim, out_dim))
 
+        # 1x1 conv + upsample is equivalent to upsample + 1x1 conv
+        # but the former is faster
         self.shortcut = nn.Sequential(
-            nn.Upsample(scale_factor=2.0),
             conv1x1(in_dim, out_dim),
+            nn.Upsample(scale_factor=2.0),
         )
 
     def forward(self, imgs: Tensor, ys: Optional[Tensor] = None):
         shortcut = self.shortcut(imgs)
         for layer in self.layers:
-            if isinstance(layer, Style):
+            if isinstance(layer, ConditionalBatchNorm2d):
                 imgs = layer(imgs, ys)
             else:
                 imgs = layer(imgs)
@@ -185,13 +199,13 @@ class Generator(nn.Module):
         smallest_map_size: int = 4,
         base_depth: int = 32,
         self_attention_sizes: Optional[List[int]] = None,
-        norm: _Norm = partial(nn.BatchNorm2d, track_running_stats=False),
+        y_layer_factory: _Layer = nn.Embedding,
         act: _Act = partial(nn.ReLU, True),
     ):
         if self_attention_sizes is None:
             self_attention_sizes = [32]
         super().__init__()
-        stage = partial(GeneratorStage, y_dim=y_dim, norm=norm, act=act)
+        stage = partial(GeneratorStage, y_dim=y_dim, y_layer_factory=y_layer_factory, act=act)
         depth = base_depth * img_size // smallest_map_size // 2
 
         self.layers = nn.ModuleList()
@@ -206,7 +220,7 @@ class Generator(nn.Module):
             if smallest_map_size in self_attention_sizes:
                 self.layers.append(SelfAttentionConv2d(in_depth))
 
-        self.layers.append(norm(in_depth))
+        self.layers.append(nn.BatchNorm2d(in_depth))
         self.layers.append(act())
         self.layers.append(conv3x3(in_depth, img_depth))
         self.layers.append(nn.Tanh())
