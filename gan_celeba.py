@@ -1,21 +1,16 @@
-from copy import deepcopy
 import random
+from copy import deepcopy
+from functools import partial
 
 import torch
 import torchvision.datasets as TD
 import torchvision.transforms as TT
-from torch import Tensor, nn
+from torch import nn
 from torch.utils.data import DataLoader
 
 import modelling
 from training import GANTrainer, GANTrainerConfig
 from utils import cls_from_args, get_parser
-
-
-class RowNormalizer(nn.Module):
-    def forward(self, x: Tensor):
-        x = x.float()
-        return x / x.mean(dim=1, keepdim=True)
 
 
 def main():
@@ -26,7 +21,8 @@ def main():
 
     img_size = args.img_size
     transform = TT.Compose([TT.Resize(img_size), TT.CenterCrop(img_size), TT.ToTensor(), TT.Normalize(0.5, 0.5)])
-    ds = TD.CelebA("data", split="all", transform=transform)
+    target_transform = lambda x: x / x.sum()
+    ds = TD.CelebA("data", split="all", transform=transform, target_transform=target_transform)
     dloader = DataLoader(
         dataset=ds,
         batch_size=args.batch_size,
@@ -42,11 +38,14 @@ def main():
 
     d_kwargs = dict(img_size=img_size, img_depth=3)
     g_kwargs = dict(img_size=img_size, img_depth=3, z_dim=args.z_dim)
+    if args.base_depth is not None:
+        d_kwargs.update(base_depth=args.base_depth)
+        g_kwargs.update(base_depth=args.base_depth)
 
     if args.model == "sagan":
         if args.conditional:
-            d_kwargs.update(y_dim=y_dim)
-            g_kwargs.update(y_dim=y_dim)
+            d_kwargs.update(y_dim=y_dim, y_layer_factory=partial(nn.Linear, bias=False))
+            g_kwargs.update(y_dim=y_dim, y_layer_factory=partial(nn.Linear, bias=False))
         D = modelling.sagan.Discriminator(**d_kwargs)
         G = modelling.sagan.Generator(**g_kwargs)
 
@@ -61,8 +60,8 @@ def main():
         G = model.Generator(**g_kwargs)
 
         if args.conditional:
-            y_encoder = nn.Sequential(RowNormalizer(), nn.Linear(y_dim, yemb_dim, bias=False))
-            nn.init.normal_(y_encoder[1].weight, 0, 0.02)
+            y_encoder = nn.Linear(y_dim, yemb_dim, bias=False)
+            nn.init.normal_(y_encoder.weight, 0, 0.02)
 
             D = modelling.cgan.Discriminator(D, y_encoder)
             G = modelling.cgan.Generator(G, deepcopy(y_encoder))
