@@ -13,7 +13,6 @@ from utils import cls_from_args, get_parser
 
 def main():
     parser = get_parser()
-    parser.add_argument("--model", default="dcgan")
     args = parser.parse_args()
 
     config = cls_from_args(args, GANTrainerConfig)
