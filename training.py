@@ -85,7 +85,7 @@ class GANTrainer:
         D, G, optim_d, optim_g = accelerator.prepare(D, G, optim_d, optim_g)
 
         accelerator.init_trackers(config.log_name, vars(config))
-        accelerator.print(config, AcceleratorState(), D, G, sep="\n")
+        accelerator.print(config, AcceleratorState(), D, G, optim_d, optim_g, sep="\n")
         accelerator.print(f"D: {count_params(D)/1e6:.2f}M params")
         accelerator.print(f"G: {count_params(G)/1e6:.2f}M params")
 
@@ -113,7 +113,7 @@ class GANTrainer:
             group2 = list(G.mapping_network.parameters())
             assert len(group1) + len(group2) == len(list(G.parameters()))
             param_groups = [
-                dict(params=group1),
+                dict(params=group1, lr=config.lr_g),
                 dict(params=group2, lr=config.lr_g / 100),
             ]
             optim_g = optim_cls(param_groups, **kwargs)
@@ -129,8 +129,13 @@ class GANTrainer:
         self.log_images(step)
 
         for epoch in itertools.count():
-            pbar = tqdm(dloader, desc=f"Epoch {epoch}", leave=False) if self.accelerator.is_main_process else dloader
-            for x_reals, ys in pbar:
+            tqdm_kwargs = dict(
+                desc=f"Epoch {epoch}",
+                leave=False,
+                dynamic_ncols=True,
+                disable=not self.accelerator.is_main_process
+            )
+            for x_reals, ys in tqdm(dloader, **tqdm_kwargs):
                 step += 1
                 log_dict = dict(epoch=epoch)
 

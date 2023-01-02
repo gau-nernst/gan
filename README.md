@@ -9,7 +9,7 @@ Features:
   - Hinge loss
 - Architectures
   - DCGAN
-  - NVIDIA GANs: Progressive GAN, StyleGAN, StyleGAN2 (progressive growing is not implemented)
+  - NVIDIA GANs: Progressive GAN, StyleGAN, StyleGAN2 (not implemented: progressive growing, style mixing regularization, R1 regularization, path length regularization)
   - Conditional GAN
   - SA-GAN
   - BigGAN (TODO)
