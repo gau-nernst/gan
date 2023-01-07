@@ -15,7 +15,7 @@ import torch
 import torch.nn.functional as F
 from torch import Tensor, nn
 
-from .base import _Act, _Norm, conv1x1, conv3x3, conv_norm_act
+from .base import _Act, _Norm, conv1x1, conv_norm_act
 
 
 class Blur(nn.Module):
@@ -158,7 +158,7 @@ class Generator(nn.Module):
             depth //= 2
             smallest_map_size *= 2
 
-        self.layers.append(conv3x3(in_depth, img_depth))
+        self.layers.append(conv1x1(in_depth, img_depth))
 
         self.reset_parameters()
 
