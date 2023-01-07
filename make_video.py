@@ -18,6 +18,7 @@ def main():
     parser.add_argument("--output_path", required=True)
     parser.add_argument("--key", default="generated")
     parser.add_argument("--fps", type=int, default=10)
+    parser.add_argument("--n_frames", type=int)
     parser.add_argument("--ffmpeg_args", default="-c:v libx264 -pix_fmt yuv420p -preset veryslow")
     args = parser.parse_args()
 
@@ -39,7 +40,7 @@ def main():
         zip = zipfile.ZipFile(io.BytesIO(resp.content))
         zip.extractall(font_dir)
     font = ImageFont.truetype(font_path, size=20)
-    
+
     _, text_height = font.getsize("Step")
     canvas_height = height + text_height
 
@@ -49,6 +50,12 @@ def main():
         + f" -i pipe: {args.ffmpeg_args} {args.output_path}"
     )
     proc = subprocess.Popen(cmd.split(), stdin=subprocess.PIPE)
+
+    if args.n_frames is not None:
+        if len(img_events) < args.n_frames:
+            print(f"There are only {len(img_events)} frames. {args.n_frames=} will have no effect")
+        else:
+            img_events = img_events[: args.n_frames]
 
     for img_evt in img_events:
         canvas = Image.new("RGB", (width, height + text_height), (255, 255, 255))
