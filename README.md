@@ -14,18 +14,37 @@ Features:
   - SA-GAN
   - BigGAN (TODO)
 
+Goodies:
+
+- Mixed precision and distributed training is handled by [Accelerate](https://github.com/huggingface/accelerate)
+- Logging with Tensorboard (may add W&B in the future)
+
 ## Usage
 
-Train DCGAN using WGAN loss on CelebA, same hyperparameters as paper
+Train DCGAN on MNIST, using hyperparameters specified in DCGAN paper (image size is fixed at 32x32)
 
 ```bash
-python gan_celeba.py --log_name celeba --accelerator gpu --devices 1 --method wgan --train_g_interval 5 --max_steps 200000 --optimizer RMSprop --lr 5e-5 --batch_size 64
+python gan_mnist.py --model dcgan --method gan --log_name mnist_dcgan --batch_size 32 --n_steps 100000 --lr 2e-4 --beta1 0.5 --beta2 0.999
 ```
 
-Using WGAN-GP loss
+Add `--conditional` for conditional generation (using Conditional GAN. See `gan_mnist.py` for more details)
+
+Unconditional generation | Conditional generation
+-------------------------|-----------------------
+
+Train DCGAN on CelebA to generate 64x64 images, same hyperparameters as above, with EMA
 
 ```bash
-python gan_celeba.py --log_name celeba --accelerator gpu --devices 1 --method wgan-gp --train_g_interval 5 --max_steps 200000 --optimizer Adam --lr 1e-4 --batch_size 64 --beta1 0 --beta2 0.9
+python gan_celeba.py --model dcgan --method gan --img_size 64 --log_name celeba_dcgan --batch_size 128 --n_steps 100000 --lr 2e-4 --beta1 0.5 --beta2 0.999 --ema
+```
+
+Without EMA | With EMA
+------------|---------
+
+Train DCGAN with WGAN loss on CelebA, using hyperparameters specified in the paper
+
+```bash
+python gan_celeba.py --model dcgan --method wgan --img_size 64 --log_name celeba_dcgan_wgan  --batch_size 64 --n_steps 100000 x--optimizer RMSprop --lr 5e-5 --train_g_interval 5
 ```
 
 ## Lessons
@@ -41,7 +60,8 @@ Some lessons I have learned from implementing and training GANs:
   - For Generator, Batch norm should be in training mode during training, even when it generates samples for training Discriminator. During inference, if the batch size is large, Batch norm can be in training mode also. Generating single image (batch size 1) might be problematic.
   - I haven't explored other norm layers e.g. Layer norm, Instance norm, Adaptive Instance norm.
 - Training dynamics: GAN training depends on random seed, sometimes I can get better (or worse) results by repeating the same training. GAN training may become unstable / collapse after some time, so early stopping is required.
-- WGAN and WGAN-GP are not always better than the original GAN loss.
+- Generated images can get desaturated / washed-out after a while. It seems like this starts to happen when Discriminator loss becomes plateau. There doesn't seem any literature on this phenomenon.
+- WGAN and WGAN-GP are not always better than the original GAN loss, while requiring longer training.
 - WGAN: it is necessary to train Discriminator more than Generator (so that Discriminator is a good EMD estimator given a fixed Generator), otherwise Discriminator may collapse `D(x) = D(G(z))`.
 - Optimizer: most GANs use Adam with low `beta1` (0.5 or 0.0). Some GANs (WGAN-GP, NVIDIA GANs) require `beta1=0` for stable training. WGAN uses RMSprop. I haven't experimented with other optimizers. SGD probably won't be able to optimize the minimax game. GANs also don't use weight decay.
 - Provide label information helps with GAN training. I didn't try modifying Discriminator to classify all classes + fake (suggested by [Salimans 2016](https://proceedings.neurips.cc/paper/2016/hash/8a3363abe792db2d8761d6403605aeb7-Abstract.html)), but Conditional GAN seems to speed up convergence. Conditional GAN probably prevents mode collapse also.
