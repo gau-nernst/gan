@@ -31,6 +31,7 @@ Add `--conditional` for conditional generation (using Conditional GAN. See `gan_
 
 Unconditional generation | Conditional generation
 -------------------------|-----------------------
+<video src="https://user-images.githubusercontent.com/26946864/211148684-4e41a917-6459-408f-bd89-e99392ad918a.mp4"> | <video src="https://user-images.githubusercontent.com/26946864/211149361-368e77cb-584b-49fa-9b02-83f175abb422.mp4">
 
 Train DCGAN on CelebA to generate 64x64 images, same hyperparameters as above, with EMA
 
@@ -40,6 +41,7 @@ python gan_celeba.py --model dcgan --method gan --img_size 64 --log_name celeba_
 
 Without EMA | With EMA
 ------------|---------
+<video src="https://user-images.githubusercontent.com/26946864/211149449-0e45259a-ec81-4627-a6dd-6098373a0ee8.mp4"> | <video src="https://user-images.githubusercontent.com/26946864/211149453-770a043d-476c-4d57-8250-26bd9118801c.mp4">
 
 Train DCGAN with WGAN loss on CelebA, using hyperparameters specified in the paper
 
