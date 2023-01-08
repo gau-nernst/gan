@@ -1,6 +1,7 @@
 # Progressive GAN - https://arxiv.org/pdf/1710.10196
 # See Table 2 for detailed model architecture
-# Discriminator includes blurring (introduced in StyleGAN) and supports skip-connections (used in StyleGAN2)
+# Discriminator supports BlurPool (StyleGAN) and skip-connections (StyleGAN2)
+# Generator has an option to use BlurConv
 # Not implemented features
 # - Progressive growing
 #
@@ -34,12 +35,13 @@ class Blur(nn.Module):
 
 
 class PixelNorm(nn.Module):
-    def __init__(self, in_dim: int):
+    def __init__(self, in_dim: int, eps: float = 1e-8):
         super().__init__()
         self.scale = in_dim**0.5
+        self.eps = eps
 
     def forward(self, x: Tensor) -> Tensor:
-        return F.normalize(x) * self.scale
+        return F.normalize(x, eps=self.eps) * self.scale
 
 
 class MinibatchStdDev(nn.Module):
@@ -61,6 +63,7 @@ class DiscriminatorStage(nn.Module):
         out_dim: int,
         residual: bool = False,
         act: _Act = partial(nn.LeakyReLU, 0.2, True),
+        use_blur: bool = False,
         blur_kernel: Optional[List[float]] = None,
     ):
         blur_kernel = blur_kernel or [1, 2, 1]
@@ -68,14 +71,20 @@ class DiscriminatorStage(nn.Module):
         conv3x3_act = partial(conv_norm_act, kernel_size=3, padding=1, order=["conv", "act"], act=act)
         self.main = nn.Sequential(
             conv3x3_act(in_dim, in_dim),
-            Blur(blur_kernel),  # BlurPool from StyleGAN onwards
+            Blur(blur_kernel) if use_blur else nn.Identity(),  # BlurPool from StyleGAN onwards
             conv3x3_act(in_dim, out_dim, stride=2),
         )
-        self.shortcut = nn.Sequential(Blur(blur_kernel), conv1x1(in_dim, out_dim, stride=2)) if residual else None
+        # skip-connection in StyleGAN2
+        self.shortcut = None
+        if residual:
+            self.shortcut = nn.Sequential(
+                Blur(blur_kernel) if use_blur else nn.Identity(),
+                conv1x1(in_dim, out_dim, stride=2),
+            )
 
     def forward(self, imgs: Tensor):
         out = self.main(imgs)
-        if self.shortcut is not None:  # for StyleGAN2
+        if self.shortcut is not None:  # skip-connection in StyleGAN2
             out = (out + self.shortcut(imgs)) * 2 ** (-0.5)
         return out
 
@@ -90,11 +99,13 @@ class Discriminator(nn.Module):
         smallest_map_size: int = 4,
         residual: bool = False,
         act: _Act = partial(nn.LeakyReLU, 0.2, True),
+        use_blur: bool = False,
+        blur_kernel: Optional[List[float]] = None,
     ):
         assert img_size > 4 and math.log2(img_size).is_integer()
         super().__init__()
         conv_act = partial(conv_norm_act, order=["conv", "act"], act=act)
-        stage = partial(DiscriminatorStage, act=act, residual=residual)
+        stage = partial(DiscriminatorStage, act=act, residual=residual, use_blur=use_blur, blur_kernel=blur_kernel)
 
         self.layers = nn.Sequential()
         self.layers.append(conv_act(img_depth, base_depth, 1))
@@ -130,7 +141,8 @@ class Generator(nn.Module):
         smallest_map_size: int = 4,
         norm: _Norm = PixelNorm,
         act: _Act = partial(nn.LeakyReLU, 0.2, True),
-        blur_kernel: List[float] = None,
+        use_blur: bool = False,
+        blur_kernel: Optional[List[float]] = None,
     ):
         assert img_size > 4 and math.log2(img_size).is_integer()
         blur_kernel = blur_kernel or [1, 2, 1]
@@ -153,7 +165,8 @@ class Generator(nn.Module):
             out_depth = min(depth, max_depth)
             self.layers.append(nn.Upsample(scale_factor=2.0))
             self.layers.append(conv3x3_act_norm(in_depth, out_depth))
-            self.layers.append(Blur(blur_kernel))
+            if use_blur:
+                self.layers.append(Blur(blur_kernel))
             self.layers.append(conv3x3_act_norm(out_depth, out_depth))
             in_depth = out_depth
             depth //= 2

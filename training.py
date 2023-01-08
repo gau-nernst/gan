@@ -41,6 +41,7 @@ class GANTrainerConfig:
     label_smoothing: float = 0.0
     clip: float = 0.01
     lamb: float = 10.0
+    drift_penalty: float = 0.0
     train_g_interval: int = 1
     optimizer: Literal["SGD", "Adam", "AdamW", "RMSprop"] = "Adam"
     lr: float = 2e-4
@@ -52,6 +53,9 @@ class GANTrainerConfig:
     n_steps: int = 10000
     ema: bool = False
     ema_decay: float = 0.999
+    checkpoint_interval: int = 1000
+    checkpoint_path: str = "checkpoints"
+    resume_from_checkpoint: Optional[str] = None
     log_name: str = "gan"
     log_img_interval: int = 1000
 
@@ -62,16 +66,23 @@ class GANTrainer:
         config = copy.deepcopy(config)
         config.lr_d = config.lr_d or config.lr
         config.lr_g = config.lr_g or config.lr
-        config.log_name += "/" + datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+
+        now = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        config.log_name += "/" + now
+        config.checkpoint_path += "/" + now
 
         accelerator = Accelerator(log_with="tensorboard", logging_dir="logs")
         rank_zero = accelerator.is_main_process
 
+        # spectral norm and Accelerate's fp32 wrapper will throw error to copy.deepcopy
+        G_ema = None
+        if config.ema and rank_zero:
+            G_ema = EMA(G, config.ema_decay, device=accelerator.device)
+            accelerator.register_for_checkpointing(G_ema)
+
         if config.spectral_norm_d:
             apply_spectral_normalization(D)
 
-        # spectral norm and Accelerate's fp32 wrapper will throw error to copy.deepcopy
-        G_ema = EMA(G, config.ema_decay, device=accelerator.device) if config.ema and rank_zero else None
         if config.spectral_norm_g:
             apply_spectral_normalization(G)
             if G_ema is not None:
@@ -84,7 +95,10 @@ class GANTrainer:
         optim_d, optim_g = self.build_optimizers(config, D, G)
         D, G, optim_d, optim_g = accelerator.prepare(D, G, optim_d, optim_g)
 
-        accelerator.init_trackers(config.log_name, vars(config))
+        if config.resume_from_checkpoint is not None:
+            accelerator.load_state(config.resume_from_checkpoint)
+
+        accelerator.init_trackers(config.log_name, config=vars(config))
         accelerator.print(config, AcceleratorState(), D, G, optim_d, optim_g, sep="\n")
         accelerator.print(f"D: {count_params(D)/1e6:.2f}M params")
         accelerator.print(f"G: {count_params(G)/1e6:.2f}M params")
@@ -126,6 +140,7 @@ class GANTrainer:
     def train(self, dloader: DataLoader):
         dloader = self.accelerator.prepare(dloader)
         step, finished = 0, False
+        log_interval = 50
         self.log_images(step)
 
         for epoch in itertools.count():
@@ -133,25 +148,28 @@ class GANTrainer:
                 desc=f"Epoch {epoch}",
                 leave=False,
                 dynamic_ncols=True,
-                disable=not self.accelerator.is_main_process
+                disable=not self.accelerator.is_main_process,
             )
             for x_reals, ys in tqdm(dloader, **tqdm_kwargs):
                 step += 1
                 log_dict = dict(epoch=epoch)
 
-                loss_d = self.train_D_step(x_reals, ys)
-                log_dict["loss/d"] = loss_d.item()
+                log_dict["loss/d"] = self.train_D_step(x_reals, ys).item()
 
                 if step % self.config.train_g_interval == 0:
-                    loss_g = self.train_G_step(x_reals, ys)
-                    log_dict["loss/g"] = loss_g.item()
+                    log_dict["loss/g"] = self.train_G_step(x_reals, ys).item()
 
                     if self.G_ema is not None:
-                        self.G_ema.update()
+                        self.G_ema.update(self.G)
 
-                self.accelerator.log(log_dict, step=step)
+                if step % log_interval == 0:
+                    self.accelerator.log(log_dict, step=step)
+
                 if step % self.config.log_img_interval == 0:
                     self.log_images(step)
+
+                if step % self.config.checkpoint_interval == 0:
+                    self.accelerator.save_state(f"{self.config.checkpoint_path}/step_{step:07d}")
 
                 if step >= self.config.n_steps:
                     finished = True
@@ -197,6 +215,10 @@ class GANTrainer:
 
         else:
             raise ValueError(f"Unsupported method {method}")
+
+        # progressive GAN. may remove?
+        if self.config.drift_penalty > 0:
+            loss_d = loss_d + d_reals.square().mean() * self.config.drift_penalty
 
         self.optim_d.zero_grad(set_to_none=True)
         self.accelerator.backward(loss_d)
@@ -255,7 +277,6 @@ class GANTrainer:
 class EMA(nn.Module):
     def __init__(self, model: nn.Module, ema_decay: float, warmup: int = 100, device=None):
         super().__init__()
-        self.model = model
         ema_model = copy.deepcopy(model)
         if device is not None:
             ema_model = ema_model.to(device)
@@ -265,12 +286,12 @@ class EMA(nn.Module):
         self.counter = 0
 
     @torch.no_grad()
-    def update(self):
+    def update(self, model: nn.Module):
         self.counter += 1
         if self.counter <= self.warmup:
             return
 
-        for name, param in self.model.named_parameters():
+        for name, param in model.named_parameters():
             ema_param = self.ema_model.get_parameter(name)
             diff = param - ema_param
             ema_param.add_(diff.mul_(1 - self.ema_decay))

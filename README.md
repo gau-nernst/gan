@@ -9,8 +9,12 @@ Features:
   - Hinge loss
 - Architectures
   - DCGAN
-  - NVIDIA GANs: Progressive GAN, StyleGAN, StyleGAN2 (not implemented: progressive growing, style mixing regularization, R1 regularization, path length regularization)
-  - Conditional GAN
+  - NVIDIA GANs:
+    - Progressive GAN
+    - StyleGAN
+    - StyleGAN2
+    - Not implemented (yet): progressive growing, style mixing regularization, R1 regularization, path length regularization
+  - Conditional GAN (modified for CNN)
   - SA-GAN
   - BigGAN (TODO)
 
@@ -46,7 +50,13 @@ Without EMA | With EMA
 Train DCGAN with WGAN loss on CelebA, using hyperparameters specified in the paper
 
 ```bash
-python gan_celeba.py --model dcgan --method wgan --img_size 64 --log_name celeba_dcgan_wgan  --batch_size 64 --n_steps 100000 x--optimizer RMSprop --lr 5e-5 --train_g_interval 5
+python gan_celeba.py --model dcgan --method wgan --img_size 64 --log_name celeba_dcgan_wgan --batch_size 64 --n_steps 100000 --optimizer RMSprop --lr 5e-5 --train_g_interval 5
+```
+
+Progressive GAN
+
+```bash
+python gan_celeba.py --model progressive_gan --method wgan-gp --img_size 256 --z_dim 512 --log_name celeba_progressive_gan --batch_size 16 --n_steps 100000 --optimizer Adam --beta1 0 --beta2 0.99 --lr 1e-3 --ema --drift_penalty 0.001
 ```
 
 ## Lessons
@@ -67,7 +77,11 @@ Some lessons I have learned from implementing and training GANs:
 - WGAN: it is necessary to train Discriminator more than Generator (so that Discriminator is a good EMD estimator given a fixed Generator), otherwise Discriminator may collapse `D(x) = D(G(z))`.
 - Optimizer: most GANs use Adam with low `beta1` (0.5 or 0.0). Some GANs (WGAN-GP, NVIDIA GANs) require `beta1=0` for stable training. WGAN uses RMSprop. I haven't experimented with other optimizers. SGD probably won't be able to optimize the minimax game. GANs also don't use weight decay.
 - Provide label information helps with GAN training. I didn't try modifying Discriminator to classify all classes + fake (suggested by [Salimans 2016](https://proceedings.neurips.cc/paper/2016/hash/8a3363abe792db2d8761d6403605aeb7-Abstract.html)), but Conditional GAN seems to speed up convergence. Conditional GAN probably prevents mode collapse also.
-- Progressive GAN: I don't implement progressive growing. Training at 64x64, using most of the training details from the paper, Discriminator outputs explode without Discriminator output L2 penalty (section A.1). The paper also used EMA on Generator, but I haven't tried.
+- Progressive GAN:
+  - I don't implement progressive growing.
+  - Training is quite unstable, even at low resolutions. Loss often becomes NaN after a while. Maybe gradient clipping is needed.
+  - Equalized learning rate helps with training stability. I have tried not using Equalized LR and scaling LR accordingly but it didn't work. I still think Equalized LR is not necessary since no other networks need that.
+  - I'm not sure if Discriminator output drift penalty is necessary
 - StyleGAN: mini-batch standard deviation in Discriminator and beta1=0 seem to be important. Tanh is not used in Generator (to force values in [-1,1])
 - SA-GAN: Generator uses Conditional Batch Norm for conditional generation, which follows [Miyato 2018](https://arxiv.org/abs/1802.05637). BigGAN, which extends SA-GAN, does not change this aspect. There is no evidence yet, but I think Conditional / Adaptive Instance Norm should be better (StyleGAN's approach).
 - EMA of the Generator is extremely beneficial. Training DCGAN on CelebA, EMA reduces strange artifacts, makes the generated images smoother and more coherent. [Yazıc 2019](https://arxiv.org/abs/1806.04498) studies this effect. NVIDIA GANs (Progressive GAN, StyleGAN series) and BigGAN use EMA.
