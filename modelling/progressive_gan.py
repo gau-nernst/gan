@@ -2,7 +2,7 @@
 # See Table 2 for detailed model architecture
 # Discriminator includes blurring (introduced in StyleGAN) and supports skip-connections (used in StyleGAN2)
 # Not implemented features
-# - Progressive growing and Equalized learning rate
+# - Progressive growing
 #
 # Code reference:
 # https://github.com/tkarras/progressive_growing_of_gans
@@ -14,6 +14,7 @@ from typing import List, Optional
 import torch
 import torch.nn.functional as F
 from torch import Tensor, nn
+from torch.nn.utils import parametrize
 
 from .base import _Act, _Norm, conv1x1, conv_norm_act
 
@@ -169,8 +170,23 @@ class Generator(nn.Module):
         return self.layers(z_embs[:, :, None, None])
 
 
+class EqualizedLR(nn.Module):
+    def __init__(self, weight: Tensor):
+        super().__init__()
+        fan_in, _ = nn.init._calculate_fan_in_and_fan_out(weight)
+        gain = 2**0.5  # use gain=sqrt(2) everywhere
+        self.scale = gain / fan_in**0.5
+
+    def forward(self, weight: Tensor):
+        return weight * self.scale
+
+    def extra_repr(self) -> str:
+        return f"scale={self.scale}"
+
+
 def init_weights(module: nn.Module):
     if isinstance(module, (nn.modules.conv._ConvNd, nn.Linear)):
-        nn.init.kaiming_normal_(module.weight)
+        nn.init.normal_(module.weight)
+        parametrize.register_parametrization(module, "weight", EqualizedLR(module.weight))
         if module.bias is not None:
             nn.init.zeros_(module.bias)

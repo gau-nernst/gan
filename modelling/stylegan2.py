@@ -1,6 +1,5 @@
 # StyleGAN - https://arxiv.org/abs/1812.04948
 # Not implemented features
-# - Equalized learning rate (from Progressive GAN)
 # - Style mixing regularization, R1 regularization, path length regularization
 #
 # Code reference:
