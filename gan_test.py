@@ -30,14 +30,20 @@ def test_generator(module):
     out.mean().backward()
 
 
-def test_upfirdn2d():
+@pytest.mark.parametrize("up", (1, 2))
+@pytest.mark.parametrize("down", (1, 2))
+@pytest.mark.parametrize("kernel_size", (3, 4))
+def test_upfirdn2d(up, down, kernel_size):
     x1 = torch.randn(4, 16, 8, 8, requires_grad=True)
     x2 = x1.detach().clone().requires_grad_()
-    blur = Blur(3)
+    blur = Blur(kernel_size, up=up, down=down)
 
-    y1 = _upfirdn2d(x1, blur.kernel, 1, 1, 1)
+    y1 = _upfirdn2d(x1, blur.kernel, up, down)
     y2 = blur(x2)
     assert torch.allclose(y1, y2)
+
+    scale = up / down
+    assert y1.shape == (4, 16, 8 * scale, 8 * scale)
 
     y1.abs().sum().backward()
     y2.abs().sum().backward()

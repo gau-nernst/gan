@@ -20,39 +20,49 @@ from torch.nn.utils import parametrize
 from .base import _Act, _Norm, conv1x1, conv3x3, conv_norm_act
 
 
-# implement FIR filter as depth-wise convolution
-# reference: https://github.com/NVlabs/stylegan/blob/master/training/networks_stylegan.py#L22
-def _upfirdn2d(imgs: Tensor, kernel: Tensor, up: int, down: int, padding: int):
+def _upfirdn2d(imgs: Tensor, kernel: Tensor, up: int, down: int, flip: bool = False):
+    # flip = True is used for backward pass
+    # padding will also be flipped to obtain correct gradients
     n, c, h, w = imgs.shape
     ky, kx = kernel.shape
+
+    if flip:
+        kernel = kernel.flip(0, 1)
     kernel = kernel.view(1, 1, ky, kx).expand(c, 1, ky, kx)
+
     if up > 1:
         _imgs = imgs.new_zeros(n, c, h * up, w * up)
         _imgs[:, :, ::up, ::up] = imgs
         imgs = _imgs
-    return F.conv2d(imgs, kernel, stride=down, padding=padding, groups=c)
+
+    py, px = (ky - 1) // 2, (kx - 1) // 2
+    if ky % 2 == 1 and kx % 2 == 1:
+        return F.conv2d(imgs, kernel, stride=down, padding=(py, px), groups=c)
+    else:
+        pad = (px, px + 1, py, py + 1) if flip else (px + 1, px, py + 1, py)
+        return F.conv2d(F.pad(imgs, pad), kernel, stride=down, groups=c)
 
 
 # backward pass for FIR filter is identical to its forward pass
 # override backward() to significantly speed up backward pass
 # gradient wrt conv kernel doesn't need to be computed
-# reference: https://github.com/NVlabs/stylegan/blob/master/training/networks_stylegan.py#L96
+# references:
+# - https://github.com/NVlabs/stylegan/blob/master/training/networks_stylegan.py
+# - https://github.com/NVlabs/stylegan2/blob/master/dnnlib/tflib/ops/upfirdn_2d.py
 class UpFIRDn2d(torch.autograd.Function):
     @staticmethod
     @torch.cuda.amp.custom_fwd
-    def forward(ctx, imgs: Tensor, kernel: Tensor, up: int, down: int, padding: int):
+    def forward(ctx, imgs: Tensor, kernel: Tensor, up: int, down: int):
         ctx.save_for_backward(kernel.flip(0, 1))
         ctx.up = up
         ctx.down = down
-        ctx.padding = padding
-        return _upfirdn2d(imgs, kernel, up, down, padding)
+        return _upfirdn2d(imgs, kernel, up, down)
 
     @staticmethod
     @torch.cuda.amp.custom_bwd
     def backward(ctx, grad_outputs: Tensor):
         (kernel,) = ctx.saved_tensors
-        grad_inputs = _upfirdn2d(grad_outputs, kernel, ctx.down, ctx.up, ctx.padding)
-        print(grad_outputs.shape, grad_inputs.shape)
+        grad_inputs = _upfirdn2d(grad_outputs, kernel, ctx.down, ctx.up, flip=True)
         return grad_inputs, None, None, None, None
 
 
@@ -61,11 +71,10 @@ class Blur(nn.Module):
         super().__init__()
         self.up = up
         self.down = down
-        self.padding = (kernel_size - 1) // 2
         self.register_buffer("kernel", self.make_kernel(kernel_size))
 
     def forward(self, imgs: Tensor):
-        return UpFIRDn2d.apply(imgs, self.kernel, self.up, self.down, self.padding)
+        return UpFIRDn2d.apply(imgs, self.kernel, self.up, self.down)
 
     @staticmethod
     def make_kernel(kernel_size: int):
