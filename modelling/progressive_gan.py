@@ -1,6 +1,6 @@
 # Progressive GAN - https://arxiv.org/pdf/1710.10196
 # See Table 2 for detailed model architecture
-# Discriminator supports BlurPool (StyleGAN) and skip-connections (StyleGAN2)
+# Discriminator supports BlurConv (StyleGAN) and skip-connections (StyleGAN2)
 # Generator has an option to use BlurConv
 # Not implemented features
 # - Progressive growing
@@ -10,7 +10,7 @@
 
 import math
 from functools import partial
-from typing import List, Optional, Literal
+from typing import List, Optional
 
 import torch
 import torch.nn.functional as F
@@ -20,54 +20,105 @@ from torch.nn.utils import parametrize
 from .base import _Act, _Norm, conv1x1, conv3x3, conv_norm_act
 
 
-# this is very slow
+# implement FIR filter as depth-wise convolution
+# reference: https://github.com/NVlabs/stylegan/blob/master/training/networks_stylegan.py#L22
+def _upfirdn2d(imgs: Tensor, kernel: Tensor, up: int, down: int, padding: int):
+    n, c, h, w = imgs.shape
+    ky, kx = kernel.shape
+    kernel = kernel.view(1, 1, ky, kx).expand(c, 1, ky, kx)
+    if up > 1:
+        _imgs = imgs.new_zeros(n, c, h * up, w * up)
+        _imgs[:, :, ::up, ::up] = imgs
+        imgs = imgs
+    return F.conv2d(imgs, kernel, stride=down, padding=padding, groups=c)
+
+
+# backward pass for FIR filter is identical to its forward pass
+# override backward() to significantly speed up backward pass
+# gradient wrt conv kernel doesn't need to be computed
+# reference: https://github.com/NVlabs/stylegan/blob/master/training/networks_stylegan.py#L96
+class UpFIRDn2d(torch.autograd.Function):
+    @staticmethod
+    @torch.cuda.amp.custom_fwd
+    def forward(ctx, imgs: Tensor, kernel: Tensor, up: int, down: int, padding: int):
+        ctx.save_for_backward(kernel.flip(0, 1))
+        ctx.up = up
+        ctx.down = down
+        ctx.padding = padding
+        return _upfirdn2d(imgs, kernel, up, down, padding)
+
+    @staticmethod
+    @torch.cuda.amp.custom_bwd
+    def backward(ctx, grad_outputs: Tensor):
+        (kernel,) = ctx.saved_tensors
+        grad_inputs = _upfirdn2d(grad_outputs, kernel, ctx.down, ctx.up, ctx.padding)
+        return grad_inputs, None, None, None, None
+
+
 class Blur(nn.Module):
-    def __init__(self, kernel: Optional[List[float]] = None, stride=1):
-        kernel = kernel or [1, 2, 1]
+    def __init__(self, kernel_size: int = 3, up: int = 1, down: int = 1):
         super().__init__()
-        k = len(kernel)
-        kernel = torch.tensor(kernel, dtype=torch.float)
-        kernel = kernel.view(1, -1) * kernel.view(-1, 1)
-        kernel = kernel.view(1, 1, k, k) / kernel.sum()
-        self.register_buffer("kernel", kernel)
-        self.stride = stride
-        self.padding = (k - 1) // 2
+        self.up = up
+        self.down = down
+        self.padding = (kernel_size - 1) // 2
+        self.register_buffer("kernel", self.make_kernel(kernel_size))
 
     def forward(self, imgs: Tensor):
-        n, c, h, w = imgs.shape
-        imgs = imgs.view(n * c, 1, h, w)
-        imgs = F.conv2d(imgs, self.kernel, stride=self.stride, padding=self.padding)
-        imgs = imgs.view(n, c, h, w)
-        return imgs
+        return UpFIRDn2d.apply(imgs, self.kernel, self.up, self.down, self.padding)
+
+    @staticmethod
+    def make_kernel(kernel_size: int):
+        # https://github.com/adobe/antialiased-cnns/blob/master/antialiased_cnns/blurpool.py
+        # example kernels: [1,2,1], [1,3,3,1]
+        assert 2 <= kernel_size <= 7
+        kernel = [math.comb(kernel_size - 1, i) for i in range(kernel_size)]
+        kernel = torch.tensor(kernel, dtype=torch.float) / sum(kernel)
+        return kernel.view(1, -1) * kernel.view(-1, 1)
 
 
-def resample_conv(
+def up_conv_blur(
     in_channels: int,
     out_channels: int,
     kernel_size: int,
-    padding: int = 0,
-    resample: Literal["up", "down"] = "down",
-    use_blur: bool = False,
-    blur_kernel: Optional[List[float]] = None,
+    blur_size: Optional[int] = 3,
 ):
-    conv = partial(nn.Conv2d, in_channels, out_channels, kernel_size, padding=padding)
-    conv_t = partial(nn.ConvTranspose2d, in_channels, out_channels, kernel_size, padding=padding, output_padding=1)
-    up = partial(nn.Upsample, scale_factor=2.0)
-    down = partial(nn.AvgPool2d, kernel_size=2)
-    blur = partial(Blur, blur_kernel=blur_kernel)
-
-    if use_blur:
-        if resample == "up":
-            # TODO: merge up+blur
-            layers = [conv(), up(), blur()] if kernel_size == 1 else [conv_t(), blur()]
-        else:
-            layers = [blur(stride=2), conv()] if kernel_size == 1 else [blur(), conv(stride=2)]
-
+    padding = (kernel_size - 1) // 2
+    output_padding = kernel_size % 2
+    if blur_size is None:
+        layers = nn.Sequential(
+            nn.Upsample(scale_factor=2.0),
+            nn.Conv2d(in_channels, out_channels, kernel_size, 1, padding),
+        )
+    elif kernel_size == 1:  # this is never used
+        layers = nn.Sequential(conv1x1(in_channels, out_channels), Blur(blur_size, up=2))
     else:
-        # StyleGAN merges up() and down() into conv kernel
-        layers = [up(), conv()] if resample == "up" else [conv(), down()]
+        layers = nn.Sequential(
+            nn.ConvTranspose2d(in_channels, out_channels, kernel_size, 2, padding, output_padding),
+            Blur(blur_size),
+        )
+    return layers
 
-    return nn.Sequential(*layers)
+
+def blur_conv_down(
+    in_channels: int,
+    out_channels: int,
+    kernel_size: int,
+    blur_size: Optional[int] = 3,
+):
+    padding = (kernel_size - 1) // 2
+    if blur_size is None:
+        layers = nn.Sequential(
+            nn.Conv2d(in_channels, out_channels, kernel_size, 1, padding),
+            nn.AvgPool2d(2),
+        )
+    elif kernel_size == 1:
+        layers = nn.Sequential(Blur(blur_size, down=2), conv1x1(in_channels, out_channels))
+    else:
+        layers = nn.Sequential(
+            Blur(blur_size),
+            nn.Conv2d(in_channels, out_channels, kernel_size, 2, padding),
+        )
+    return layers
 
 
 class PixelNorm(nn.Module):
@@ -99,16 +150,15 @@ class DiscriminatorStage(nn.Module):
         out_dim: int,
         residual: bool = False,
         act: _Act = partial(nn.LeakyReLU, 0.2, True),
-        use_blur: bool = False,
-        blur_kernel: Optional[List[float]] = None,
+        blur_size: Optional[int] = None,
     ):
         super().__init__()
         conv_act = partial(conv_norm_act, order=["conv", "act"], conv=conv3x3, act=act)
-        down_conv = partial(resample_conv, resample="down", use_blur=use_blur, blur_kernel=blur_kernel)
+        down_conv = partial(blur_conv_down, blur_size=blur_size)
 
         self.main = nn.Sequential(
             conv_act(in_dim, in_dim),
-            conv_act(in_dim, out_dim, conv=partial(down_conv, kernel_size=3, padding=1)),
+            conv_act(in_dim, out_dim, conv=partial(down_conv, kernel_size=3)),
         )
         self.shortcut = down_conv(in_dim, out_dim, 1) if residual else None  # skip-connection in StyleGAN2
 
@@ -129,13 +179,12 @@ class Discriminator(nn.Module):
         smallest_map_size: int = 4,
         residual: bool = False,
         act: _Act = partial(nn.LeakyReLU, 0.2, True),
-        use_blur: bool = False,
-        blur_kernel: Optional[List[float]] = None,
+        blur_size: Optional[int] = None,
     ):
         assert img_size > 4 and math.log2(img_size).is_integer()
         super().__init__()
         conv_act = partial(conv_norm_act, order=["conv", "act"], conv=conv3x3, act=act)
-        stage = partial(DiscriminatorStage, act=act, residual=residual, use_blur=use_blur, blur_kernel=blur_kernel)
+        stage = partial(DiscriminatorStage, act=act, residual=residual, blur_size=blur_size)
 
         self.layers = nn.Sequential()
         self.layers.append(conv_act(img_depth, base_depth, conv=conv1x1))
@@ -171,14 +220,11 @@ class Generator(nn.Module):
         smallest_map_size: int = 4,
         norm: _Norm = PixelNorm,
         act: _Act = partial(nn.LeakyReLU, 0.2, True),
-        use_blur: bool = False,
-        blur_kernel: Optional[List[float]] = None,
+        blur_size: Optional[int] = None,
     ):
         assert img_size > 4 and math.log2(img_size).is_integer()
         super().__init__()
-        up_conv3x3 = partial(
-            resample_conv, kernel_size=3, padding=1, resample="up", use_blur=use_blur, blur_kernel=blur_kernel
-        )
+        up_conv3x3 = partial(up_conv_blur, kernel_size=3, blur_size=blur_size)
         conv_act_norm = partial(conv_norm_act, order=["conv", "act", "norm"], conv=conv3x3, act=act, norm=norm)
 
         in_depth = z_dim

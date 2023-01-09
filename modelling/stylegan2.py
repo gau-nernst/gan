@@ -21,6 +21,8 @@ from .progressive_gan import init_weights
 Discriminator = partial(_Discriminator, residual=True)
 
 
+# TODO: refactor out ModulatedConv
+# torgb() doesn't have noise, blur, and upsample
 class GeneratorBlock(nn.Module):
     def __init__(
         self,
@@ -31,13 +33,12 @@ class GeneratorBlock(nn.Module):
         upsample: bool = False,
         demodulation: bool = True,
         act: Optional[_Act] = partial(nn.LeakyReLU, 0.2, True),
-        blur_kernel: Optional[List[float]] = None,
+        blur_size: int = 4,
     ):
-        blur_kernel = blur_kernel or [1, 3, 3, 1]
         super().__init__()
         self.demodulation = demodulation
         self.upsample = nn.Upsample(scale_factor=2.0) if upsample else None
-        self.blur = Blur(blur_kernel) if upsample else None
+        self.blur = Blur(blur_size) if upsample else None
 
         self.conv = nn.Conv2d(in_dim, out_dim, kernel_size)
         self.noise_weight = nn.Parameter(torch.tensor(0.0))  # B in paper
@@ -45,7 +46,7 @@ class GeneratorBlock(nn.Module):
         self.act = act() if act is not None else nn.Identity()
 
     def forward(self, imgs: Tensor, w_embs: Tensor, noise: Optional[Tensor] = None):
-        if self.upsample is not None:
+        if self.upsample is not None:  # TODO: merge with conv into conv_transpose
             imgs = self.upsample(imgs)
         b, c, h, w = imgs.shape
         out_dim, in_dim, ky, kx = self.conv.weight.shape
@@ -80,10 +81,9 @@ class Generator(nn.Module):
         base_depth: int = 16,
         max_depth: int = 512,
         act: _Act = partial(nn.LeakyReLU, 0.2, True),
-        blur_kernel: Optional[List[float]] = None,
+        blur_size: int = 4,
     ):
         assert img_size > 4 and math.log2(img_size).is_integer()
-        blur_kernel = blur_kernel or [1, 3, 3, 1]
         super().__init__()
         self.mapping_network = nn.Sequential()
         for i in range(mapping_network_depth):
@@ -91,10 +91,12 @@ class Generator(nn.Module):
             self.mapping_network.append(act())
 
         self.learned_input = nn.Parameter(torch.empty(1, input_depth, smallest_map_size, smallest_map_size))
-        self.upsample_blur = nn.Sequential(nn.Upsample(scale_factor=2.0), Blur(blur_kernel))
+        self.up_blur = Blur(blur_size, up=2)
 
-        block = partial(GeneratorBlock, w_dim=w_dim, kernel_size=3, act=act)
-        to_rgb = partial(GeneratorBlock, out_dim=img_depth, w_dim=w_dim, kernel_size=1, demodulation=False, act=None)
+        block = partial(GeneratorBlock, w_dim=w_dim, kernel_size=3, act=act, blur_size=blur_size)
+        to_rgb = partial(
+            GeneratorBlock, out_dim=img_depth, w_dim=w_dim, kernel_size=1, demodulation=False, act=None
+        )  # wrong
         depth = base_depth * img_size // smallest_map_size
         out_depth = min(depth, max_depth)
 
@@ -127,7 +129,7 @@ class Generator(nn.Module):
             if not layer.demodulation:  # to_rgb layer
                 y = y + layer(x, w_embs)
                 if i < len(self.layers) - 1:
-                    y = self.upsample_blur(y)
+                    y = self.up_blur(y)
             else:
                 x = layer(x, w_embs)
         return y

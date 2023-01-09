@@ -85,6 +85,8 @@ Some lessons I have learned from implementing and training GANs:
   - I'm not sure if Discriminator output drift penalty is necessary
   - Mini-batch standard deviation in Discriminator and beta1=0 seem to be important
   - Tanh is not used in Generator (to force values in [-1,1])
-- StyleGAN: Blurring using depth-wise convolution incurs a large speed drop. Perhaps NVIDIA's CUDA kernel (upfirdn2d) is needed (popular re-implementations like MMGeneration, rosinality all use the custom CUDA kernel). Try the CUDA kernel to confirm speed up and then re-implement in Triton?
+- StyleGAN:
+  - Blurring using depth-wise convolution is very slow in backward pass. However, since FIR filtering backward is identical to its forward, overriding backward pass solves the speed issue (subclass `torch.autograd.Function`). StyleGAN official codebase uses this approach.
+  - Most popular re-implementations like MMGeneration and rosinality use NVIDIA's custom CUDA kernel (upfirdn2d, introduced in StyleGAN2).
 - SA-GAN: Generator uses Conditional Batch Norm for conditional generation, which follows [Miyato 2018](https://arxiv.org/abs/1802.05637). BigGAN, which extends SA-GAN, does not change this aspect. There is no evidence yet, but I think Conditional / Adaptive Instance Norm should be better (StyleGAN's approach).
 - EMA of the Generator is extremely beneficial. Training DCGAN on CelebA, EMA reduces strange artifacts, makes the generated images smoother and more coherent. [Yazıc 2019](https://arxiv.org/abs/1806.04498) studies this effect. NVIDIA GANs (Progressive GAN, StyleGAN series) and BigGAN use EMA.

@@ -13,7 +13,7 @@ import torch
 from torch import Tensor, nn
 
 from .base import _Act, _Norm, conv1x1, conv3x3
-from .progressive_gan import Blur, Discriminator, init_weights
+from .progressive_gan import Discriminator, init_weights, up_conv_blur
 
 
 class GeneratorBlock(nn.Module):
@@ -26,18 +26,13 @@ class GeneratorBlock(nn.Module):
         upsample: bool = False,
         norm: _Norm = nn.InstanceNorm2d,
         act: _Act = partial(nn.LeakyReLU, 0.2, True),
-        blur_kernel: Optional[List[float]] = None,
+        blur_size: int = 3,
     ):
-        blur_kernel = blur_kernel or [1, 2, 1]
         super().__init__()
         if first_block:
             self.conv = nn.Identity()
         elif upsample:
-            self.conv = nn.Sequential(
-                nn.Upsample(scale_factor=2.0),
-                conv3x3(in_dim, out_dim),
-                Blur(blur_kernel),
-            )
+            self.conv = up_conv_blur(in_dim, out_dim, 3, blur_size=blur_size)
         else:
             self.conv = conv3x3(in_dim, out_dim)
         self.noise_weight = nn.Parameter(torch.zeros(1, out_dim, 1, 1))  # B in paper
@@ -71,7 +66,7 @@ class Generator(nn.Module):
         base_depth: int = 16,
         max_depth: int = 512,
         act: _Act = partial(nn.LeakyReLU, 0.2, True),
-        blur_kernel: Optional[List[float]] = None,
+        blur_size: int = 3,
     ):
         assert img_size > 4 and math.log2(img_size).is_integer()
         super().__init__()
@@ -82,7 +77,7 @@ class Generator(nn.Module):
 
         self.learned_input = nn.Parameter(torch.empty(1, input_depth, smallest_map_size, smallest_map_size))
 
-        block = partial(GeneratorBlock, w_dim=w_dim, act=act, blur_kernel=blur_kernel)
+        block = partial(GeneratorBlock, w_dim=w_dim, act=act, blur_size=blur_size)
         depth = base_depth * img_size // smallest_map_size
         out_depth = min(depth, max_depth)
 
