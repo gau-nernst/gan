@@ -29,7 +29,7 @@ def _upfirdn2d(imgs: Tensor, kernel: Tensor, up: int, down: int, padding: int):
     if up > 1:
         _imgs = imgs.new_zeros(n, c, h * up, w * up)
         _imgs[:, :, ::up, ::up] = imgs
-        imgs = imgs
+        imgs = _imgs
     return F.conv2d(imgs, kernel, stride=down, padding=padding, groups=c)
 
 
@@ -52,6 +52,7 @@ class UpFIRDn2d(torch.autograd.Function):
     def backward(ctx, grad_outputs: Tensor):
         (kernel,) = ctx.saved_tensors
         grad_inputs = _upfirdn2d(grad_outputs, kernel, ctx.down, ctx.up, ctx.padding)
+        print(grad_outputs.shape, grad_inputs.shape)
         return grad_inputs, None, None, None, None
 
 
