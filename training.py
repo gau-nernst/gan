@@ -53,7 +53,7 @@ class GANTrainerConfig:
     n_steps: int = 10000
     ema: bool = False
     ema_decay: float = 0.999
-    checkpoint_interval: int = 1000
+    checkpoint_interval: int = 10000
     checkpoint_path: str = "checkpoints"
     resume_from_checkpoint: Optional[str] = None
     log_name: str = "gan"
@@ -151,9 +151,7 @@ class GANTrainer:
                 disable=not self.accelerator.is_main_process,
             )
             for x_reals, ys in tqdm(dloader, **tqdm_kwargs):
-                step += 1
                 log_dict = dict(epoch=epoch)
-
                 log_dict["loss/d"] = self.train_D_step(x_reals, ys).item()
 
                 if step % self.config.train_g_interval == 0:
@@ -162,8 +160,12 @@ class GANTrainer:
                     if self.G_ema is not None:
                         self.G_ema.update(self.G)
 
+                # loss values are associated with models before the optimizer step
+                # therefore, increment `step` after logging
                 if step % log_interval == 0:
                     self.accelerator.log(log_dict, step=step)
+
+                step += 1
 
                 if step % self.config.log_img_interval == 0:
                     self.log_images(step)
@@ -203,7 +205,7 @@ class GANTrainer:
 
             if method == "wgan-gp":
                 alpha = torch.rand(bsize, 1, 1, 1, device=x_reals.device)
-                x_inters = (x_reals * alpha + x_fakes * (1 - alpha)).requires_grad_()
+                x_inters = torch.lerp(x_reals, x_fakes, alpha).requires_grad_()
                 d_inters = self._forward(self.D, x_inters, ys)
 
                 (d_grad,) = torch.autograd.grad(d_inters, x_inters, torch.ones_like(d_inters), create_graph=True)
