@@ -51,17 +51,21 @@ def resample_conv(
     blur_kernel: Optional[List[float]] = None,
 ):
     conv = partial(nn.Conv2d, in_channels, out_channels, kernel_size, padding=padding)
+    conv_t = partial(nn.ConvTranspose2d, in_channels, out_channels, kernel_size, padding=padding, output_padding=1)
     up = partial(nn.Upsample, scale_factor=2.0)
+    down = partial(nn.AvgPool2d, kernel_size=2)
     blur = partial(Blur, blur_kernel=blur_kernel)
 
     if use_blur:
         if resample == "up":
-            layers = [conv(), up(), blur()] if kernel_size == 1 else [up(), conv(), blur()]
+            # TODO: merge up+blur
+            layers = [conv(), up(), blur()] if kernel_size == 1 else [conv_t(), blur()]
         else:
             layers = [blur(stride=2), conv()] if kernel_size == 1 else [blur(), conv(stride=2)]
 
     else:
-        layers = [up(), conv()] if resample == "up" else [conv(stride=2)]
+        # StyleGAN merges up() and down() into conv kernel
+        layers = [up(), conv()] if resample == "up" else [conv(), down()]
 
     return nn.Sequential(*layers)
 
