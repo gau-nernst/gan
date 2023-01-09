@@ -2,6 +2,7 @@ import pytest
 import torch
 
 from modelling import dcgan, progressive_gan, sagan, stylegan, stylegan2
+from modelling.progressive_gan import Blur, _upfirdn2d
 
 IMG_SIZE = 64
 IMG_DEPTH = 3
@@ -27,3 +28,18 @@ def test_generator(module):
     out = G(torch.randn(NOISE_SHAPE))
     assert out.shape == IMG_SHAPE
     out.mean().backward()
+
+
+def test_upfirdn2d():
+    x1 = torch.randn(4, 16, 8, 8, requires_grad=True)
+    x2 = x1.detach().clone().requires_grad_()
+    blur = Blur(3)
+
+    y1 = _upfirdn2d(x1, blur.kernel, 1, 1, 1)
+    y2 = blur(x2)
+    assert torch.allclose(y1, y2)
+
+    y1.abs().sum().backward()
+    y2.abs().sum().backward()
+
+    assert torch.allclose(x1.grad, x2.grad)
