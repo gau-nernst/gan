@@ -13,6 +13,12 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 
+def cuda_speed_up():
+    torch.backends.cuda.matmul.allow_tf32 = True
+    torch.backends.cudnn.allow_tf32 = True
+    torch.backends.cudnn.benchmark = True
+
+
 def apply_spectral_normalization(module: nn.Module):
     for name, child in module.named_children():
         if isinstance(child, (nn.modules.conv._ConvNd, nn.Linear)):
@@ -71,6 +77,7 @@ class GANTrainer:
         config.log_name += "/" + now
         config.checkpoint_path += "/" + now
 
+        cuda_speed_up()
         accelerator = Accelerator(log_with="tensorboard", logging_dir="logs")
         rank_zero = accelerator.is_main_process
 

@@ -85,6 +85,7 @@ Some lessons I have learned from implementing and training GANs:
   - I'm not sure if Discriminator output drift penalty is necessary
   - Mini-batch standard deviation in Discriminator and beta1=0 seem to be important
   - Tanh is not used in Generator (to force values in [-1,1])
+  - The author needed to use batch size 16 in order to fit training in GPU memory at 1024x1024 resolution. Having larger batch size is actually better, but hyperparameters need to be adjusted i.e. larger learning rate.
 - StyleGAN:
   - Blurring using depth-wise convolution is very slow in backward pass. However, since FIR filtering backward is identical to its forward, overriding backward pass solves the speed issue (subclass `torch.autograd.Function`). StyleGAN official codebase uses this approach.
   - Most popular re-implementations like MMGeneration and rosinality use NVIDIA's custom CUDA kernel (upfirdn2d, introduced in StyleGAN2).
