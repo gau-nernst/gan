@@ -57,7 +57,7 @@ class GeneratorBlock(nn.Module):
         if self.demodulation:
             weight = weight / torch.linalg.vector_norm(weight, dim=(1, 2, 3), keepdim=True)
 
-        imgs = imgs.reshape(1, b * c, h, w)
+        imgs = imgs.reshape(b * c, h, w)
         imgs = F.conv2d(imgs, weight, padding="same", groups=b)
         imgs = imgs.view(b, out_dim, h, w)
         if self.blur is not None:

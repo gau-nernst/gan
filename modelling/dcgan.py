@@ -27,15 +27,16 @@ class Discriminator(nn.Module):
         assert img_size >= 4 and math.log2(img_size).is_integer()
         assert math.log2(smallest_map_size).is_integer()
         super().__init__()
-        layer = partial(conv_norm_act, kernel_size=4, stride=2, padding=1, bias=False, norm=norm, act=act)
+        conv = partial(nn.Conv2d, kernel_size=4, stride=2, padding=1, bias=False)
+        _conv_norm_act = partial(conv_norm_act, conv=conv, norm=norm, act=act)
 
         self.layers = nn.Sequential()
-        self.layers.append(layer(img_depth, base_depth))
+        self.layers.append(_conv_norm_act(img_depth, base_depth))
         img_size //= 2
 
         # add strided conv until image size = 4
         while img_size > smallest_map_size:
-            self.layers.append(layer(base_depth, base_depth * 2))
+            self.layers.append(_conv_norm_act(base_depth, base_depth * 2))
             base_depth *= 2
             img_size //= 2
 
@@ -65,20 +66,24 @@ class Generator(nn.Module):
         assert img_size >= 4 and math.log2(img_size).is_integer()
         assert math.log2(smallest_map_size).is_integer()
         super().__init__()
-        layer = partial(conv_norm_act, bias=False, conv=nn.ConvTranspose2d, norm=norm, act=act)
+        conv = partial(nn.ConvTranspose2d, kernel_size=4, stride=2, padding=1, bias=False)
+        _conv_norm_act = partial(conv_norm_act, conv=conv, norm=norm, act=act)
         depth = base_depth * img_size // 2 // smallest_map_size
 
         self.layers = nn.Sequential()
-        self.layers.append(layer(z_dim, depth, smallest_map_size))  # matmul and reshape to 4x4
+
+        # matmul and reshape to 4x4
+        first_layer = _conv_norm_act(z_dim, depth, conv=partial(nn.ConvTranspose2d, kernel_size=smallest_map_size))
+        self.layers.append(first_layer)
 
         # conv transpose until reaching image size / 2
         while smallest_map_size < img_size // 2:
-            self.layers.append(layer(depth, depth // 2, 4, 2, 1))
+            self.layers.append(_conv_norm_act(depth, depth // 2))
             depth //= 2
             smallest_map_size *= 2
 
         # last layer use tanh activation
-        self.layers.append(nn.ConvTranspose2d(depth, img_depth, 4, 2, 1))
+        self.layers.append(nn.ConvTranspose2d(depth, img_depth, 4, 2, 1))  # TODO: check if the last layer has bias
         self.layers.append(nn.Tanh())
 
         self.reset_parameters()
