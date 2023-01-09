@@ -73,8 +73,9 @@ Some lessons I have learned from implementing and training GANs:
   - I haven't explored other norm layers e.g. Layer norm, Instance norm, Adaptive Instance norm.
 - Training dynamics: GAN training depends on random seed, sometimes I can get better (or worse) results by repeating the same training. GAN training may become unstable / collapse after some time, so early stopping is required.
 - Generated images can get desaturated / washed-out after a while. It seems like this starts to happen when Discriminator loss becomes plateau. There doesn't seem any literature on this phenomenon.
-- WGAN and WGAN-GP are not always better than the original GAN loss, while requiring longer training.
-- WGAN: it is necessary to train Discriminator more than Generator (so that Discriminator is a good EMD estimator given a fixed Generator), otherwise Discriminator may collapse `D(x) = D(G(z))`.
+- WGAN and WGAN-GP:
+  - They are not always better than the original GAN loss, while requiring longer training.
+  - WGAN: it is necessary to train Discriminator more than Generator (so that Discriminator is a good EMD estimator given a fixed Generator), otherwise Discriminator may collapse `D(x) = D(G(z))`.
 - Optimizer: most GANs use Adam with low `beta1` (0.5 or 0.0). Some GANs (WGAN-GP, NVIDIA GANs) require `beta1=0` for stable training. WGAN uses RMSprop. I haven't experimented with other optimizers. SGD probably won't be able to optimize the minimax game. GANs also don't use weight decay.
 - Provide label information helps with GAN training. I didn't try modifying Discriminator to classify all classes + fake (suggested by [Salimans 2016](https://proceedings.neurips.cc/paper/2016/hash/8a3363abe792db2d8761d6403605aeb7-Abstract.html)), but Conditional GAN seems to speed up convergence. Conditional GAN probably prevents mode collapse also.
 - Progressive GAN:
@@ -82,6 +83,8 @@ Some lessons I have learned from implementing and training GANs:
   - Training is quite unstable, even at low resolutions. Loss often becomes NaN after a while. Maybe gradient clipping is needed.
   - Equalized learning rate helps with training stability. I have tried not using Equalized LR and scaling LR accordingly but it didn't work. I still think Equalized LR is not necessary since no other networks need that.
   - I'm not sure if Discriminator output drift penalty is necessary
-- StyleGAN: mini-batch standard deviation in Discriminator and beta1=0 seem to be important. Tanh is not used in Generator (to force values in [-1,1])
+  - Mini-batch standard deviation in Discriminator and beta1=0 seem to be important
+  - Tanh is not used in Generator (to force values in [-1,1])
+- StyleGAN: Blurring using depth-wise convolution incurs a large speed drop. Perhaps NVIDIA's CUDA kernel (upfirdn2d) is needed (popular re-implementations like MMGeneration, rosinality all use the custom CUDA kernel). Try the CUDA kernel to confirm speed up and then re-implement in Triton?
 - SA-GAN: Generator uses Conditional Batch Norm for conditional generation, which follows [Miyato 2018](https://arxiv.org/abs/1802.05637). BigGAN, which extends SA-GAN, does not change this aspect. There is no evidence yet, but I think Conditional / Adaptive Instance Norm should be better (StyleGAN's approach).
 - EMA of the Generator is extremely beneficial. Training DCGAN on CelebA, EMA reduces strange artifacts, makes the generated images smoother and more coherent. [Yazıc 2019](https://arxiv.org/abs/1806.04498) studies this effect. NVIDIA GANs (Progressive GAN, StyleGAN series) and BigGAN use EMA.
