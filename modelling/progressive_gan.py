@@ -20,14 +20,9 @@ from torch.nn.utils import parametrize
 from .base import _Act, _Norm, conv1x1, conv3x3, conv_norm_act
 
 
-def _upfirdn2d(imgs: Tensor, kernel: Tensor, up: int, down: int, flip: bool = False):
-    # flip = True is used for backward pass
-    # padding will also be flipped to obtain correct gradients
+def _upfirdn2d(imgs: Tensor, kernel: Tensor, up: int, down: int, px1: int, px2: int, py1: int, py2: int):
     n, c, h, w = imgs.shape
     ky, kx = kernel.shape
-
-    if flip:
-        kernel = kernel.flip(0, 1)
     kernel = kernel.view(1, 1, ky, kx).expand(c, 1, ky, kx)
 
     if up > 1:
@@ -35,12 +30,10 @@ def _upfirdn2d(imgs: Tensor, kernel: Tensor, up: int, down: int, flip: bool = Fa
         _imgs[:, :, ::up, ::up] = imgs
         imgs = _imgs
 
-    py, px = (ky - 1) // 2, (kx - 1) // 2
-    if ky % 2 == 1 and kx % 2 == 1:
-        return F.conv2d(imgs, kernel, stride=down, padding=(py, px), groups=c)
+    if px1 == px2 and py1 == py2:
+        return F.conv2d(imgs, kernel, stride=down, padding=(py1, px1), groups=c)
     else:
-        pad = (px, px + 1, py, py + 1) if flip else (px + 1, px, py + 1, py)
-        return F.conv2d(F.pad(imgs, pad), kernel, stride=down, groups=c)
+        return F.conv2d(F.pad(imgs, (px1, px2, py1, py2)), kernel, stride=down, groups=c)
 
 
 # backward pass for FIR filter is identical to its forward pass
@@ -53,17 +46,20 @@ class UpFIRDn2d(torch.autograd.Function):
     @staticmethod
     @torch.cuda.amp.custom_fwd
     def forward(ctx, imgs: Tensor, kernel: Tensor, up: int, down: int):
+        ky, kx = kernel.shape
+        px1, py1 = (kx - 1) // 2, (ky - 1) // 2
+        px2, py2 = kx - 1 - px1, ky - 1 - py1
         ctx.save_for_backward(kernel.flip(0, 1))
-        ctx.up = up
-        ctx.down = down
-        return _upfirdn2d(imgs, kernel, up, down)
+        ctx.args = (up, down, px1, px2, py1, py2)
+        return _upfirdn2d(imgs, kernel, up, down, px1, px2, py1, py2)
 
     @staticmethod
     @torch.cuda.amp.custom_bwd
     def backward(ctx, grad_outputs: Tensor):
         (kernel,) = ctx.saved_tensors
-        grad_inputs = _upfirdn2d(grad_outputs, kernel, ctx.down, ctx.up, flip=True)
-        return grad_inputs, None, None, None, None
+        up, down, px1, px2, py1, py2 = ctx.args
+        grad_inputs = _upfirdn2d(grad_outputs, kernel, down, up, px2, px1, py2, py1)
+        return grad_inputs, None, None, None
 
 
 class Blur(nn.Module):
