@@ -33,8 +33,8 @@ def main():
         drop_last=True,
     )
     y_dim = 40
-    fixed_z = torch.randn((40, args.z_dim))
-    fixed_y = torch.stack([ds[idx][1] for idx in random.sample(range(len(ds)), 40)], dim=0)
+    fixed_z = torch.randn((args.n_log_imgs, args.z_dim))
+    fixed_y = torch.stack([ds[idx][1] for idx in random.sample(range(len(ds)), args.n_log_imgs)], dim=0)
 
     d_kwargs = dict(img_size=img_size, img_depth=3)
     g_kwargs = dict(img_size=img_size, img_depth=3, z_dim=args.z_dim)

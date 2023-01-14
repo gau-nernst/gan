@@ -75,7 +75,7 @@ class GANTrainer:
 
         now = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         config.log_name += "/" + now
-        config.checkpoint_path += "/" + now
+        config.checkpoint_path += config.log_name
 
         cuda_speed_up()
         accelerator = Accelerator(log_with="tensorboard", logging_dir="logs")
@@ -297,13 +297,14 @@ class EMA(nn.Module):
     @torch.no_grad()
     def update(self, model: nn.Module):
         self.counter += 1
-        if self.counter <= self.warmup:
+        if self.counter < self.warmup:
             return
-
+        
         for name, param in model.named_parameters():
             ema_param = self.ema_model.get_parameter(name)
-            diff = param - ema_param
-            ema_param.add_(diff.mul_(1 - self.ema_decay))
+            if self.counter > self.warmup:
+                param = torch.lerp(ema_param, param, 1 - self.ema_decay)
+            ema_param.copy_(param)
 
     def forward(self, *args, **kwargs):
         return self.ema_model(*args, **kwargs)

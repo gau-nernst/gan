@@ -31,8 +31,9 @@ def main():
     )
 
     y_dim = 10
-    fixed_z = torch.randn((40, args.z_dim))
-    fixed_y = torch.arange(y_dim).repeat_interleave(40 // y_dim)
+    n_log_imgs = args.n_log_imgs // 10 * 10
+    fixed_z = torch.randn((n_log_imgs, args.z_dim))
+    fixed_y = torch.arange(y_dim).repeat_interleave(n_log_imgs // y_dim)
 
     d_kwargs = dict(img_size=32, img_depth=1)
     g_kwargs = dict(img_size=32, img_depth=1, z_dim=args.z_dim)
