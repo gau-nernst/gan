@@ -52,7 +52,7 @@ class SelfAttentionConv2d(nn.Module):
         v_ratio: int = 2,
     ):
         super().__init__()
-        self.qkv_sizes = (in_dim // qk_ratio,) * 2 + (in_dim // v_ratio,)
+        self.qkv_sizes = [in_dim // qk_ratio] * 2 + [in_dim // v_ratio]
         self.qkv_conv = conv1x1(in_dim, sum(self.qkv_sizes), bias=False)
         self.out_conv = conv1x1(self.qkv_sizes[2], in_dim, bias=False)
         self.scale = nn.Parameter(torch.tensor(0.0))

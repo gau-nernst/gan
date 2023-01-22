@@ -7,18 +7,17 @@
 
 import math
 from functools import partial
-from typing import List, Optional
+from typing import Optional
 
 import torch
 import torch.nn.functional as F
 from torch import Tensor, nn
 
 from .base import _Act
-from .progressive_gan import Blur
-from .progressive_gan import Discriminator as _Discriminator
-from .progressive_gan import init_weights
+from .nvidia_ops import Blur
+from .progressive_gan import Discriminator, init_weights
 
-Discriminator = partial(_Discriminator, residual=True)
+Discriminator = partial(Discriminator, residual=True)
 
 
 # TODO: refactor out ModulatedConv
@@ -63,9 +62,11 @@ class GeneratorBlock(nn.Module):
         imgs = imgs.view(b, out_dim, h, w)
         if self.blur is not None:
             imgs = self.blur(imgs)
+        if self.conv.bias is not None:
+            imgs = imgs + self.conv.bias.view(1, -1, 1, 1)
 
         noise = noise or torch.randn(b, 1, h, w, device=imgs.device)
-        return self.act(imgs + self.conv.bias.view(1, -1, 1, 1) + noise * self.noise_weight)
+        return self.act(imgs + noise * self.noise_weight)
 
 
 class Generator(nn.Module):

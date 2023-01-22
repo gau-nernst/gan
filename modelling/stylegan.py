@@ -13,7 +13,8 @@ import torch
 from torch import Tensor, nn
 
 from .base import _Act, _Norm, conv1x1, conv3x3
-from .progressive_gan import Discriminator, init_weights, up_conv_blur
+from .nvidia_ops import up_conv_blur
+from .progressive_gan import Discriminator, init_weights
 
 
 class GeneratorBlock(nn.Module):
