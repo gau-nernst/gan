@@ -2,7 +2,7 @@ import copy
 import datetime
 import itertools
 from dataclasses import dataclass
-from typing import Literal, Optional
+from typing import Any, Literal, Optional
 
 import torch
 import torch.nn.functional as F
@@ -78,7 +78,7 @@ class GANTrainer:
         config.checkpoint_path += config.log_name
 
         cuda_speed_up()
-        accelerator = Accelerator(log_with="tensorboard", logging_dir="logs")
+        accelerator = Accelerator(log_with=["tensorboard"], logging_dir="logs")
         rank_zero = accelerator.is_main_process
 
         # spectral norm and Accelerate's fp32 wrapper will throw error to copy.deepcopy
@@ -117,13 +117,13 @@ class GANTrainer:
         self.G_ema = G_ema
         self.optim_d = optim_d
         self.optim_g = optim_g
-        self.fixed_z = fixed_z.to(accelerator.device) if rank_zero else None
-        self.fixed_y = fixed_y.to(accelerator.device) if rank_zero else None
+        self.fixed_z = fixed_z.to(accelerator.device)
+        self.fixed_y = fixed_y.to(accelerator.device)
 
     @staticmethod
     def build_optimizers(config: GANTrainerConfig, D: nn.Module, G: nn.Module):
         optim_cls = getattr(torch.optim, config.optimizer)
-        kwargs = dict(weight_decay=config.weight_decay)
+        kwargs: dict[str, Any] = dict(weight_decay=config.weight_decay)
         if config.optimizer in ("Adam", "AdamW"):
             kwargs.update(betas=(config.beta1, config.beta2))
 
@@ -158,7 +158,7 @@ class GANTrainer:
                 disable=not self.accelerator.is_main_process,
             )
             for x_reals, ys in tqdm(dloader, **tqdm_kwargs):
-                log_dict = dict(epoch=epoch)
+                log_dict: dict[str, Any] = dict(epoch=epoch)
                 log_dict["loss/d"] = self.train_D_step(x_reals, ys).item()
 
                 if step % self.config.train_g_interval == 0:
@@ -189,7 +189,7 @@ class GANTrainer:
 
         self.accelerator.end_training()
 
-    def _forward(self, m: nn.Module, xs: Tensor, ys: Tensor) -> Tensor:
+    def _forward(self, m: nn.Module, xs: Tensor, ys: Optional[Tensor]) -> Tensor:
         return m(xs, ys) if self.config.conditional else m(xs)
 
     def train_D_step(self, x_reals: Tensor, ys: Tensor):
@@ -299,7 +299,7 @@ class EMA(nn.Module):
         self.counter += 1
         if self.counter < self.warmup:
             return
-        
+
         for name, param in model.named_parameters():
             ema_param = self.ema_model.get_parameter(name)
             if self.counter > self.warmup:
