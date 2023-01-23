@@ -4,6 +4,7 @@ from typing import Optional
 import torch
 import torch.nn.functional as F
 from torch import Tensor, nn
+from torch.cuda.amp.autocast_mode import custom_bwd, custom_fwd
 
 from .base import conv1x1
 
@@ -64,6 +65,25 @@ def upfirdn2d(imgs: Tensor, kernel: Tensor, up: int, down: int, px1: int, px2: i
         return F.conv2d(F.pad(imgs, (px1, px2, py1, py2)), kernel, stride=down, groups=c)
 
 
+# significant speed-up for higher order gradients
+# https://pytorch.org/tutorials/intermediate/custom_function_double_backward_tutorial.html
+class UpFIRDn2d(torch.autograd.Function):
+    @staticmethod
+    @custom_fwd
+    def forward(ctx, imgs, kernel, up, down, px1, px2, py1, py2):
+        ctx.save_for_backward(kernel.flip(0, 1))
+        ctx.others = (up, down, px1, px2, py1, py2)
+        return upfirdn2d(imgs, kernel, up, down, px1, px2, py1, py2)
+
+    @staticmethod
+    @custom_bwd
+    def backward(ctx, grad_output):
+        (kernel,) = ctx.saved_tensors
+        up, down, px1, px2, py1, py2 = ctx.others
+        grad_imgs = UpFIRDn2d.apply(grad_output, kernel, down, up, px2, px1, py2, py1)
+        return grad_imgs, *[None] * 7
+
+
 class Blur(nn.Module):
     def __init__(self, kernel_size: int = 3, up: int = 1, down: int = 1):
         super().__init__()
@@ -75,7 +95,9 @@ class Blur(nn.Module):
         self.kernel: Tensor
 
     def forward(self, imgs: Tensor):
-        return upfirdn2d(imgs, self.kernel, self.up, self.down, self.p1, self.p2, self.p1, self.p2)
+        # gradfix version is only faster for 2nd and higher order gradient
+        fn = UpFIRDn2d.apply if self.training else upfirdn2d
+        return fn(imgs, self.kernel, self.up, self.down, self.p1, self.p2, self.p1, self.p2)
 
     @staticmethod
     def make_kernel(kernel_size: int):
