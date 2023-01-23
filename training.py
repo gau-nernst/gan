@@ -14,6 +14,9 @@ from tqdm import tqdm
 
 
 def cuda_speed_up():
+    import torch.backends.cuda
+    import torch.backends.cudnn
+
     torch.backends.cuda.matmul.allow_tf32 = True
     torch.backends.cudnn.allow_tf32 = True
     torch.backends.cudnn.benchmark = True
@@ -129,7 +132,7 @@ class GANTrainer:
 
         optim_d = optim_cls(D.parameters(), lr=config.lr_d, **kwargs)
 
-        if hasattr(G, "mapping_network"):  # stylegan
+        if hasattr(G, "mapping_network") and isinstance(G.mapping_network, nn.Module):  # stylegan
             group1 = [p for name, p in G.named_parameters() if not name.startswith("mapping_network.")]
             group2 = list(G.mapping_network.parameters())
             assert len(group1) + len(group2) == len(list(G.parameters()))
@@ -284,7 +287,7 @@ class GANTrainer:
 
 # reference: https://github.com/lucidrains/ema-pytorch
 class EMA(nn.Module):
-    def __init__(self, model: nn.Module, ema_decay: float, warmup: int = 100, device=None):
+    def __init__(self, model: nn.Module, ema_decay: float = 0.999, warmup: int = 100, device=None):
         super().__init__()
         ema_model = copy.deepcopy(model)
         if device is not None:
@@ -303,8 +306,9 @@ class EMA(nn.Module):
         for name, param in model.named_parameters():
             ema_param = self.ema_model.get_parameter(name)
             if self.counter > self.warmup:
-                param = torch.lerp(ema_param, param, 1 - self.ema_decay)
-            ema_param.copy_(param)
+                ema_param.lerp_(param, 1 - self.ema_decay)
+            else:
+                ema_param.copy_(param)
 
     def forward(self, *args, **kwargs):
         return self.ema_model(*args, **kwargs)
