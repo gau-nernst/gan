@@ -20,7 +20,7 @@ from .progressive_gan import Discriminator, init_weights
 
 
 @dataclass
-class Config:
+class StyleGANConfig:
     img_size: int = 128  # basics
     img_depth: int = 3
     z_dim: int = 512
@@ -39,7 +39,7 @@ class Config:
 
 
 class MappingNetwork(nn.Module):
-    def __init__(self, config: Config):
+    def __init__(self, config: StyleGANConfig):
         super().__init__()
         self.mlp = nn.Sequential()
         for i in range(config.mapping_network_depth):
@@ -85,7 +85,7 @@ class GeneratorBlock(nn.Module):
         self,
         in_dim: int,
         out_dim: int,
-        config: Config,
+        config: StyleGANConfig,
         first_block: bool = False,
         upsample: bool = False,
     ):
@@ -115,8 +115,8 @@ class GeneratorBlock(nn.Module):
 
 
 class Generator(nn.Module):
-    def __init__(self, config: Optional[Config] = None, **kwargs):
-        config = config or Config()
+    def __init__(self, config: Optional[StyleGANConfig] = None, **kwargs):
+        config = config or StyleGANConfig()
         config = replace(config, **kwargs)
         assert config.img_size > 4 and math.log2(config.img_size).is_integer()
         super().__init__()
@@ -126,20 +126,19 @@ class Generator(nn.Module):
         in_depth = config.input_depth
         self.learned_input = nn.Parameter(torch.empty(1, in_depth, map_size, map_size))
 
-        block = partial(GeneratorBlock, config=config)
         depth = config.base_depth * config.img_size // map_size
         out_depth = min(depth, config.max_depth)
 
         self.layers = nn.ModuleList()
-        self.layers.append(block(in_depth, in_depth, first_block=True))
-        self.layers.append(block(in_depth, out_depth))
+        self.layers.append(GeneratorBlock(in_depth, in_depth, config, first_block=True))
+        self.layers.append(GeneratorBlock(in_depth, out_depth, config))
         in_depth = out_depth
         depth //= 2
 
         while map_size < config.img_size:
             out_depth = min(depth, config.max_depth)
-            self.layers.append(block(in_depth, out_depth, upsample=True))
-            self.layers.append(block(out_depth, out_depth))
+            self.layers.append(GeneratorBlock(in_depth, out_depth, config, upsample=True))
+            self.layers.append(GeneratorBlock(out_depth, out_depth, config))
             in_depth = out_depth
             depth //= 2
             map_size *= 2
