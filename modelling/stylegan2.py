@@ -7,7 +7,6 @@
 
 import math
 from dataclasses import dataclass, replace
-from functools import partial
 from typing import Optional
 
 import torch
@@ -18,39 +17,48 @@ from .nvidia_ops import Blur
 from .progressive_gan import Discriminator, init_weights
 from .stylegan import MappingNetwork, StyleGANConfig
 
-Discriminator = partial(Discriminator, residual=True)
-
 
 @dataclass
 class StyleGAN2Config(StyleGANConfig):
     blur_size: int = 4  # override stylegan
 
 
+class Discriminator(Discriminator):
+    def __init__(self, config: Optional[StyleGAN2Config] = None, **kwargs):
+        config = config or StyleGAN2Config()
+        config = replace(config, **kwargs)
+        super().__init__(
+            img_size=config.img_size,
+            img_depth=config.img_depth,
+            base_depth=config.base_depth,
+            max_depth=config.max_depth,
+            smallest_map_size=config.smallest_map_size,
+            residual=True,
+            act=config.act,
+            blur_size=config.blur_size,
+        )
+
+
 class ModulatedConv2d(nn.Module):
     def __init__(self, in_dim: int, out_dim: int, kernel_size: int, w_dim: int, demodulation: bool = True):
         super().__init__()
-        self.conv = nn.Conv2d(in_dim, out_dim, kernel_size)  # to contain weights and register parametrization
+        # to contain weights for initialization and parametrization
+        self.conv = nn.Conv2d(in_dim, out_dim, kernel_size, padding=(kernel_size - 1) // 2)
         self.style_weight = nn.Linear(w_dim, in_dim)  # A in paper
         self.demodulation = demodulation
+        self.batched_conv2d = torch.vmap(F.conv2d)
 
     def forward(self, imgs: Tensor, w_embs: Tensor):
-        b, c, h, w = imgs.shape
-        out_dim, in_dim, ky, kx = self.conv.weight.shape
+        b, c, _, _ = imgs.shape
 
         # modulation
         style = self.style_weight(w_embs).view(b, 1, c, 1, 1) + 1
         weight = self.conv.weight.unsqueeze(0) * style
-        weight = weight.view(b * out_dim, in_dim, ky, kx)
         if self.demodulation:
-            weight = weight / torch.linalg.vector_norm(weight, dim=(1, 2, 3), keepdim=True)
+            weight = weight / torch.linalg.vector_norm(weight, dim=(2, 3, 4), keepdim=True)
 
-        # use vmap?
-        imgs = imgs.reshape(b * c, h, w)
-        imgs = F.conv2d(imgs, weight, padding="same", groups=b)
-        imgs = imgs.reshape(b, out_dim, h, w)
-
-        if self.conv.bias is not None:
-            imgs = imgs + self.conv.bias.view(1, -1, 1, 1)
+        bias = self.conv.bias.view(1, -1).expand(b, -1) if self.conv.bias is not None else None
+        imgs = self.batched_conv2d(imgs, weight, bias, padding=self.conv.padding)
         return imgs
 
 

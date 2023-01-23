@@ -38,6 +38,22 @@ class StyleGANConfig:
     blur_size: int = 3
 
 
+class Discriminator(Discriminator):
+    def __init__(self, config: Optional[StyleGANConfig] = None, **kwargs):
+        config = config or StyleGANConfig()
+        config = replace(config, **kwargs)
+        super().__init__(
+            img_size=config.img_size,
+            img_depth=config.img_depth,
+            base_depth=config.base_depth,
+            max_depth=config.max_depth,
+            smallest_map_size=config.smallest_map_size,
+            residual=False,
+            act=config.act,
+            blur_size=config.blur_size,
+        )
+
+
 class MappingNetwork(nn.Module):
     def __init__(self, config: StyleGANConfig):
         super().__init__()
