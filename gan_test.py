@@ -3,7 +3,8 @@ import torch
 import torch.nn.functional as F
 
 from modelling import dcgan, progressive_gan, sagan, stylegan, stylegan2
-from modelling.nvidia_ops import Blur, upfirdn2d
+from modelling.nvidia_ops import Blur, UpFIRDn2d, upfirdn2d
+
 
 IMG_SIZE = 64
 IMG_DEPTH = 3
@@ -29,6 +30,30 @@ def test_generator(module):
     out = G(torch.randn(NOISE_SHAPE))
     assert out.shape == IMG_SHAPE
     out.mean().backward()
+
+
+@pytest.mark.parametrize("kernel_size", (3, 4))
+@pytest.mark.parametrize("up", (1, 2))
+@pytest.mark.parametrize("down", (1, 2))
+def test_upfirdn2d_grad_fix(kernel_size, up, down):
+    imgs = torch.randn(4, 16, 8, 8, requires_grad=True, dtype=torch.double)
+    kernel = torch.randn(kernel_size, kernel_size, dtype=torch.double)
+    p1 = (kernel_size - 1) // 2
+    p2 = kernel_size - 1 - p1
+
+    # need to square so that 2nd order gradient is non-zero
+    loss1 = upfirdn2d(imgs, kernel, up, down, p1, p2, p1, p2).square().sum()
+    loss2 = UpFIRDn2d.apply(imgs, kernel, up, down, p1, p2, p1, p2).square().sum()
+
+    # 1st order gradient
+    (grad1,) = torch.autograd.grad(loss1, imgs, create_graph=True)
+    (grad2,) = torch.autograd.grad(loss2, imgs, create_graph=True)
+    assert torch.allclose(grad1, grad2)
+
+    # 2nd order gradient
+    (gradgrad1,) = torch.autograd.grad(grad1.sum(), imgs, create_graph=True)
+    (gradgrad2,) = torch.autograd.grad(grad2.sum(), imgs, create_graph=True)
+    assert torch.allclose(gradgrad1, gradgrad2)
 
 
 def test_upfirdn2d_avg_pool():
