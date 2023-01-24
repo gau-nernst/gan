@@ -1,15 +1,18 @@
 from functools import partial
 from typing import Callable, List, Optional
 
+import torch
+import torch.nn.functional as F
 from torch import nn
 
 _Conv = Callable[..., nn.Module]
 _Norm = Callable[[int], nn.Module]
 _Act = Callable[[], nn.Module]
 
-
 conv3x3 = partial(nn.Conv2d, kernel_size=3, padding=1)
 conv1x1 = partial(nn.Conv2d, kernel_size=1)
+
+batched_conv2d = torch.vmap(F.conv2d)
 
 
 def conv_norm_act(

@@ -1,18 +1,18 @@
-# StyleGAN - https://arxiv.org/abs/1812.04948
+# StyleGAN2 - https://arxiv.org/abs/1912.04958
 # Not implemented features
-# - R1 regularization, path length regularization
+# - Path length regularization
 #
 # Code reference:
-# https://github.com/NVlabs/stylegan
+# https://github.com/NVlabs/stylegan2
 
 import math
 from dataclasses import dataclass, replace
 from typing import Optional
 
 import torch
-import torch.nn.functional as F
 from torch import Tensor, nn
 
+from .base import batched_conv2d
 from .nvidia_ops import Blur
 from .progressive_gan import Discriminator, init_weights
 from .stylegan import MappingNetwork, StyleGANConfig
@@ -46,7 +46,6 @@ class ModulatedConv2d(nn.Module):
         self.conv = nn.Conv2d(in_dim, out_dim, kernel_size, padding=(kernel_size - 1) // 2)
         self.style_weight = nn.Linear(w_dim, in_dim)  # A in paper
         self.demodulation = demodulation
-        self.batched_conv2d = torch.vmap(F.conv2d)
 
     def forward(self, imgs: Tensor, w_embs: Tensor):
         b, c, _, _ = imgs.shape
@@ -58,7 +57,7 @@ class ModulatedConv2d(nn.Module):
             weight = weight / torch.linalg.vector_norm(weight, dim=(2, 3, 4), keepdim=True)
 
         bias = self.conv.bias.view(1, -1).expand(b, -1) if self.conv.bias is not None else None
-        imgs = self.batched_conv2d(imgs, weight, bias, padding=self.conv.padding)
+        imgs = batched_conv2d(imgs, weight, bias, padding=self.conv.padding)
         return imgs
 
 
@@ -79,6 +78,11 @@ class GeneratorBlock(nn.Module):
         return self.act(imgs + noise * self.noise_weight)
 
 
+class RGBLayer(ModulatedConv2d):
+    def __init__(self, in_dim: int, config: StyleGAN2Config):
+        super().__init__(in_dim, config.img_depth, 1, config.w_dim, demodulation=False)
+
+
 class Generator(nn.Module):
     def __init__(self, config: Optional[StyleGAN2Config] = None, **kwargs):
         config = config or StyleGAN2Config()
@@ -96,7 +100,7 @@ class Generator(nn.Module):
         out_depth = min(depth, config.max_depth)
 
         self.first_block = GeneratorBlock(in_depth, out_depth, config)
-        self.first_to_rgb = ModulatedConv2d(out_depth, config.img_depth, 1, config.w_dim, demodulation=False)
+        self.first_to_rgb = RGBLayer(out_depth, config)
         in_depth = out_depth
         depth //= 2
 
@@ -106,7 +110,7 @@ class Generator(nn.Module):
             stage = dict(
                 block1=GeneratorBlock(in_depth, out_depth, config, upsample=True),
                 block2=GeneratorBlock(out_depth, out_depth, config),
-                to_rgb=ModulatedConv2d(out_depth, config.img_depth, 1, config.w_dim, demodulation=False),
+                to_rgb=RGBLayer(out_depth, config),
             )
             self.stages.append(nn.ModuleDict(stage))
             in_depth = out_depth

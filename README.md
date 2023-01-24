@@ -12,8 +12,8 @@ Features:
   - NVIDIA GANs:
     - Progressive GAN
     - StyleGAN
-    - StyleGAN2
-    - Not implemented (yet): progressive growing, style mixing regularization, R1 regularization, path length regularization
+    - StyleGAN2 (may implement ADA version)
+    - Not implemented (yet): progressive growing, path length regularization
   - Conditional GAN (modified for CNN)
   - SA-GAN
   - BigGAN (TODO)

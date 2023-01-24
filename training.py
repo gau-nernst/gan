@@ -48,9 +48,11 @@ class GANTrainerConfig:
     spectral_norm_d: bool = False
     spectral_norm_g: bool = False
     label_smoothing: float = 0.0
-    clip: float = 0.01
-    lamb: float = 10.0
+    wgan_clip: float = 0.01
+    wgan_gp_lamb: float = 10.0
     drift_penalty: float = 0.0
+    r1_penalty: float = 0.0
+    r1_penalty_interval: int = 1
     train_g_interval: int = 1
     optimizer: Literal["SGD", "Adam", "AdamW", "RMSprop"] = "Adam"
     lr: float = 2e-4
@@ -71,7 +73,7 @@ class GANTrainerConfig:
 
 class GANTrainer:
     def __init__(self, config: GANTrainerConfig, D: nn.Module, G: nn.Module, fixed_z: Tensor, fixed_y: Tensor):
-        assert config.clip > 0
+        assert config.wgan_clip > 0
         config = copy.deepcopy(config)
         config.lr_d = config.lr_d or config.lr
         config.lr_g = config.lr_g or config.lr
@@ -162,10 +164,10 @@ class GANTrainer:
             )
             for x_reals, ys in tqdm(dloader, **tqdm_kwargs):
                 log_dict: dict[str, Any] = dict(epoch=epoch)
-                log_dict["loss/d"] = self.train_D_step(x_reals, ys).item()
+                log_dict["loss/d"] = self.train_D_step(x_reals, ys, step).item()
 
                 if step % self.config.train_g_interval == 0:
-                    log_dict["loss/g"] = self.train_G_step(x_reals, ys).item()
+                    log_dict["loss/g"] = self.train_G_step(x_reals, ys, step).item()
 
                     if self.G_ema is not None:
                         self.G_ema.update(self.G)
@@ -195,9 +197,12 @@ class GANTrainer:
     def _forward(self, m: nn.Module, xs: Tensor, ys: Optional[Tensor]) -> Tensor:
         return m(xs, ys) if self.config.conditional else m(xs)
 
-    def train_D_step(self, x_reals: Tensor, ys: Tensor):
+    def train_D_step(self, x_reals: Tensor, ys: Tensor, step: int):
         bsize = x_reals.shape[0]
         method = self.config.method
+
+        if self.config.r1_penalty > 0 and step % self.config.r1_penalty_interval == 0:
+            x_reals.requires_grad_()
 
         with torch.no_grad():
             z_noise = torch.randn(bsize, self.config.z_dim, device=self.accelerator.device)
@@ -215,12 +220,12 @@ class GANTrainer:
 
             if method == "wgan-gp":
                 alpha = torch.rand(bsize, 1, 1, 1, device=x_reals.device)
-                x_inters = torch.lerp(x_reals, x_fakes, alpha).requires_grad_()
+                x_inters = x_reals.lerp(x_fakes, alpha).requires_grad_()
                 d_inters = self._forward(self.D, x_inters, ys)
 
-                (d_grad,) = torch.autograd.grad(d_inters, x_inters, torch.ones_like(d_inters), create_graph=True)
+                (d_grad,) = torch.autograd.grad(d_inters.sum(), x_inters, create_graph=True)
                 d_grad_norm = torch.linalg.vector_norm(d_grad, dim=(1, 2, 3))
-                loss_d = loss_d + self.config.lamb * ((d_grad_norm - 1) ** 2).mean()
+                loss_d = loss_d + self.config.wgan_gp_lamb * ((d_grad_norm - 1) ** 2).mean()
 
         elif method == "hinge":
             loss_d = F.relu(1 - d_reals).mean() + F.relu(1 + d_fakes).mean()
@@ -228,9 +233,15 @@ class GANTrainer:
         else:
             raise ValueError(f"Unsupported method {method}")
 
-        # progressive GAN. may remove?
+        # for Progressive GAN. may remove?
         if self.config.drift_penalty > 0:
             loss_d = loss_d + d_reals.square().mean() * self.config.drift_penalty
+
+        # https://arxiv.org/abs/1801.04406, for StyleGAN and StyleGAN2
+        if self.config.r1_penalty > 0 and step % self.config.r1_penalty_interval == 0:
+            (d_grad,) = torch.autograd.grad(d_reals.sum(), x_reals, create_graph=True)
+            d_grad_norm2 = d_grad.square().sum() / bsize
+            loss_d = loss_d + d_grad_norm2 * self.config.r1_penalty / 2
 
         self.optim_d.zero_grad(set_to_none=True)
         self.accelerator.backward(loss_d)
@@ -239,14 +250,14 @@ class GANTrainer:
         # Algorithm 1 in paper clip weights after optimizer step, but GitHub code clip before optimizer step
         # it doesn't seem to matter much in practice
         if method == "wgan":
-            clip = self.config.clip
+            clip = self.config.wgan_clip
             with torch.no_grad():
                 for param in self.D.parameters():
                     param.clip_(-clip, clip)
 
         return loss_d
 
-    def train_G_step(self, x_reals: Tensor, ys: Tensor):
+    def train_G_step(self, x_reals: Tensor, ys: Tensor, step: int):
         bsize = x_reals.shape[0]
         method = self.config.method
         self.D.requires_grad_(False)

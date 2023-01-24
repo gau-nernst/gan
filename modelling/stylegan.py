@@ -1,7 +1,6 @@
 # StyleGAN - https://arxiv.org/abs/1812.04948
 # Not implemented features
 # - Progressive growing (from Progressive GAN)
-# - R1 regularization
 #
 # Code reference:
 # https://github.com/NVlabs/stylegan
@@ -15,7 +14,7 @@ import torch
 from torch import Tensor, nn
 
 from .base import _Act, conv1x1, conv3x3
-from .nvidia_ops import up_conv_blur
+from .nvidia_ops import PixelNorm, up_conv_blur
 from .progressive_gan import Discriminator, init_weights
 
 
@@ -57,7 +56,7 @@ class Discriminator(Discriminator):
 class MappingNetwork(nn.Module):
     def __init__(self, config: StyleGANConfig):
         super().__init__()
-        self.mlp = nn.Sequential()
+        self.mlp = nn.Sequential(PixelNorm(config.z_dim))
         for i in range(config.mapping_network_depth):
             self.mlp.append(nn.Linear(config.z_dim if i == 0 else config.w_dim, config.w_dim))
             self.mlp.append(config.act())
@@ -73,9 +72,10 @@ class MappingNetwork(nn.Module):
         w_embs = self.mlp(z_embs)
 
         if self.training:
-            self.w_mean.lerp_(w_embs.detach().mean(0), 1 - self.w_mean_beta)
+            self.w_mean.lerp_(w_embs.detach().mean(0), 1 - self.w_mean_beta)  # this might be unnecessary
             w_embs = w_embs.unsqueeze(1).expand(-1, self.n_layers, -1)
 
+            # TODO: style mixing in eval mode
             if self.style_mixing > 0 and torch.rand([]) < self.style_mixing:
                 w_embs2 = self.mlp(torch.randn_like(z_embs))
                 w_embs2 = w_embs2.unsqueeze(1).expand(-1, self.n_layers, -1)
@@ -118,11 +118,11 @@ class GeneratorBlock(nn.Module):
         self.style_weight = nn.Linear(config.w_dim, out_dim)  # A in paper
         self.style_bias = nn.Linear(config.w_dim, out_dim)
 
-    def forward(self, imgs: Tensor, w_embs: Tensor, noise: Optional[Tensor] = None):
+    def forward(self, imgs: Tensor, w_embs: Tensor):
         imgs = self.conv(imgs)
-        b, c, h, w = imgs.shape
 
-        noise = noise or torch.randn(b, 1, h, w, device=imgs.device)
+        b, _, h, w = imgs.shape
+        noise = torch.randn(b, 1, h, w, device=imgs.device)
         imgs = self.act(imgs + noise * self.noise_weight)
 
         style_weight = self.style_weight(w_embs).view(b, -1, 1, 1) + 1

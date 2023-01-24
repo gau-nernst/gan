@@ -1,3 +1,11 @@
+# common building blocks used in NVIDIA GANs: Progressive GAN, StyleGAN series
+#
+# Code reference:
+# https://github.com/tkarras/progressive_growing_of_gans
+# https://github.com/NVlabs/stylegan
+# https://github.com/NVlabs/stylegan2
+# https://github.com/NVlabs/stylegan2-ada-pytorch
+
 import math
 from typing import Optional
 
@@ -9,7 +17,7 @@ from torch.cuda.amp.autocast_mode import custom_bwd, custom_fwd
 from .base import conv1x1
 
 
-# introduced in Progressive GAN. only used in Progressive GAN Generator
+# introduced in Progressive GAN
 class PixelNorm(nn.Module):
     def __init__(self, in_dim: int, eps: float = 1e-8):
         super().__init__()
@@ -48,7 +56,6 @@ class EqualizedLR(nn.Module):
         return f"scale={self.scale}"
 
 
-# introduced in StyleGAN
 def upfirdn2d(imgs: Tensor, kernel: Tensor, up: int, down: int, px1: int, px2: int, py1: int, py2: int):
     n, c, h, w = imgs.shape
     ky, kx = kernel.shape
@@ -84,6 +91,7 @@ class UpFIRDn2d(torch.autograd.Function):
         return grad_imgs, *[None] * 7
 
 
+# introduced in StyleGAN
 class Blur(nn.Module):
     def __init__(self, kernel_size: int = 3, up: int = 1, down: int = 1):
         super().__init__()
