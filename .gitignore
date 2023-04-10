@@ -2,3 +2,12 @@ __pycache__/
 .vscode/
 data/
 runs/
+test_images/
+logs/
+fonts/
+checkpoints/
+
+*.mp4
+*.pkl
+*.bin
+*.pt
