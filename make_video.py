@@ -6,10 +6,7 @@ import zipfile
 
 import requests
 from PIL import Image, ImageDraw, ImageFont
-from tensorboard.backend.event_processing.event_accumulator import (
-    EventAccumulator,
-    ImageEvent,
-)
+from tensorboard.backend.event_processing.event_accumulator import EventAccumulator, ImageEvent
 
 
 def main():

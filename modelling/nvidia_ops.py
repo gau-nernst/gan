@@ -69,11 +69,13 @@ def upfirdn2d(imgs: Tensor, kernel: Tensor, up: int, down: int, px1: int, px2: i
     if px1 == px2 and py1 == py2:
         return F.conv2d(imgs, kernel, stride=down, padding=(py1, px1), groups=c)
     else:
-        return F.conv2d(F.pad(imgs, (px1, px2, py1, py2)), kernel, stride=down, groups=c)
+        imgs = F.pad(imgs, (px1, px2, py1, py2))
+        return F.conv2d(imgs, kernel, stride=down, groups=c)
 
 
 # significant speed-up for higher order gradients
 # https://pytorch.org/tutorials/intermediate/custom_function_double_backward_tutorial.html
+# NOTE: kernel is not flipped
 class UpFIRDn2d(torch.autograd.Function):
     @staticmethod
     @custom_fwd
@@ -103,9 +105,7 @@ class Blur(nn.Module):
         self.kernel: Tensor
 
     def forward(self, imgs: Tensor):
-        # gradfix version is only faster for 2nd and higher order gradient
-        fn = UpFIRDn2d.apply if self.training else upfirdn2d
-        return fn(imgs, self.kernel, self.up, self.down, self.p1, self.p2, self.p1, self.p2)
+        return UpFIRDn2d.apply(imgs, self.kernel, self.up, self.down, self.p1, self.p2, self.p1, self.p2)
 
     @staticmethod
     def make_kernel(kernel_size: int):

@@ -5,6 +5,7 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 
+
 _Conv = Callable[..., nn.Module]
 _Norm = Callable[[int], nn.Module]
 _Act = Callable[[], nn.Module]

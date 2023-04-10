@@ -36,8 +36,8 @@ def main():
     fixed_z = torch.randn((args.n_log_imgs, args.z_dim))
     fixed_y = torch.stack([ds[idx][1] for idx in random.sample(range(len(ds)), args.n_log_imgs)], dim=0)
 
-    d_kwargs = dict(img_size=img_size, img_depth=3)
-    g_kwargs = dict(img_size=img_size, img_depth=3, z_dim=args.z_dim)
+    d_kwargs = dict(img_size=img_size, img_depth=3, blur_size=3)
+    g_kwargs = dict(img_size=img_size, img_depth=3, z_dim=args.z_dim, blur_size=3)
     if args.base_depth is not None:
         d_kwargs.update(base_depth=args.base_depth)
         g_kwargs.update(base_depth=args.base_depth)
