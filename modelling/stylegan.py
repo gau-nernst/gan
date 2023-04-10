@@ -115,8 +115,7 @@ class GeneratorBlock(nn.Module):
         self.noise_weight = nn.Parameter(torch.zeros(1, out_dim, 1, 1))  # B in paper
         self.act = config.act()
         self.norm = nn.InstanceNorm2d(out_dim)
-        self.style_weight = nn.Linear(config.w_dim, out_dim)  # A in paper
-        self.style_bias = nn.Linear(config.w_dim, out_dim)
+        self.style = nn.Linear(config.w_dim, out_dim * 2)  # A in paper
 
     def forward(self, imgs: Tensor, w_embs: Tensor):
         imgs = self.conv(imgs)
@@ -125,9 +124,8 @@ class GeneratorBlock(nn.Module):
         noise = torch.randn(b, 1, h, w, device=imgs.device)
         imgs = self.act(imgs + noise * self.noise_weight)
 
-        style_weight = self.style_weight(w_embs).view(b, -1, 1, 1) + 1
-        style_bias = self.style_bias(w_embs).view(b, -1, 1, 1)
-        return self.norm(imgs) * style_weight + style_bias
+        style_weight, style_bias = self.style(w_embs).view(b, -1, 1, 1).chunk(2, dim=1)
+        return self.norm(imgs) * (style_weight + 1) + style_bias
 
 
 class Generator(nn.Module):
@@ -166,6 +164,9 @@ class Generator(nn.Module):
     def reset_parameters(self):
         nn.init.ones_(self.learned_input)
         self.layers.apply(init_weights)
+
+    def grow(self):
+        raise NotImplementedError
 
     def forward(self, z_embs: Tensor):
         w_embs = self.mapping_network(z_embs)  # (batch_size, n_layers, w_dim)
