@@ -81,6 +81,9 @@ class Discriminator(nn.Module):
     def reset_parameters(self):
         self.apply(init_weights)
 
+    def grow(self):
+        raise NotImplementedError
+
     def forward(self, imgs: Tensor):
         return self.layers(imgs).view(-1)
 
@@ -130,6 +133,9 @@ class Generator(nn.Module):
 
     def reset_parameters(self):
         self.apply(init_weights)
+
+    def grow(self):
+        raise NotImplementedError
 
     def forward(self, z_embs: Tensor):
         return self.layers(z_embs.view(*z_embs.shape, 1, 1))
