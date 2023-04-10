@@ -1,6 +1,5 @@
 import copy
 import datetime
-import itertools
 from dataclasses import dataclass
 from typing import Any, Literal, Optional
 
@@ -40,6 +39,12 @@ def count_params(module: nn.Module) -> int:
     return sum(p.numel() for p in module.parameters())
 
 
+def cycle(iterable):
+    while True:
+        for item in iterable:
+            yield item
+
+
 @dataclass
 class GANTrainerConfig:
     conditional: bool = False
@@ -68,6 +73,7 @@ class GANTrainerConfig:
     checkpoint_path: str = "checkpoints"
     resume_from_checkpoint: Optional[str] = None
     log_name: str = "gan"
+    log_interval: int = 50
     log_img_interval: int = 1000
 
 
@@ -151,45 +157,40 @@ class GANTrainer:
 
     def train(self, dloader: DataLoader):
         dloader = self.accelerator.prepare(dloader)
-        step, finished = 0, False
-        log_interval = 50
-        self.log_images(step)
+        step = 0
 
-        for epoch in itertools.count():
-            tqdm_kwargs = dict(
-                desc=f"Epoch {epoch}",
-                leave=False,
-                dynamic_ncols=True,
-                disable=not self.accelerator.is_main_process,
-            )
-            for x_reals, ys in tqdm(dloader, **tqdm_kwargs):
-                log_dict: dict[str, Any] = dict(epoch=epoch)
-                log_dict["loss/d"] = self.train_D_step(x_reals, ys, step).item()
+        pbar = tqdm(
+            cycle(dloader),
+            total=self.config.n_steps,
+            leave=False,
+            dynamic_ncols=True,
+            disable=not self.accelerator.is_main_process,
+        )
+        for x_reals, ys in pbar:
+            if step % self.config.log_img_interval == 0 and self.accelerator.is_main_process:
+                with torch.inference_mode():
+                    x_fakes = self._forward(self.G_ema or self.G, self.fixed_z, self.fixed_y)
+                self.log_images(x_fakes, "generated", step)
 
-                if step % self.config.train_g_interval == 0:
-                    log_dict["loss/g"] = self.train_G_step(x_reals, ys, step).item()
+            log_dict: dict[str, Any] = dict()
+            log_dict["loss/d"] = self.train_D_step(x_reals, ys, step).item()
 
-                    if self.G_ema is not None:
-                        self.G_ema.update(self.G)
+            if step % self.config.train_g_interval == 0:
+                log_dict["loss/g"] = self.train_G_step(x_reals, ys, step).item()
+                if self.G_ema is not None:
+                    self.G_ema.update(self.G)
 
-                # loss values are associated with models before the optimizer step
-                # therefore, increment `step` after logging
-                if step % log_interval == 0:
-                    self.accelerator.log(log_dict, step=step)
+            # loss values are associated with models before the optimizer step
+            # therefore, increment `step` after logging
+            if step % self.config.log_interval == 0:
+                self.accelerator.log(log_dict, step=step)
 
-                step += 1
+            step += 1
 
-                if step % self.config.log_img_interval == 0:
-                    self.log_images(step)
+            if step % self.config.checkpoint_interval == 0:
+                self.accelerator.save_state(f"{self.config.checkpoint_path}/step_{step:07d}")
 
-                if step % self.config.checkpoint_interval == 0:
-                    self.accelerator.save_state(f"{self.config.checkpoint_path}/step_{step:07d}")
-
-                if step >= self.config.n_steps:
-                    finished = True
-                    break
-
-            if finished:
+            if step >= self.config.n_steps:
                 break
 
         self.accelerator.end_training()
@@ -283,17 +284,16 @@ class GANTrainer:
         return loss_g
 
     @torch.inference_mode()
-    def log_images(self, step: int):
+    def log_images(self, imgs: Tensor, tag: str, step: int):
         if not self.accelerator.is_main_process:
             return
-        logger = self.accelerator.get_tracker("tensorboard")
 
-        x_fakes = self._forward(self.G, self.fixed_z, self.fixed_y).mul_(0.5).add_(0.5)
-        logger.add_images("generated", x_fakes, step)
+        for tracker in self.accelerator.trackers:
+            if tracker.name == "tensorboard":
+                tracker.tracker.add_images(tag, imgs, step)
 
-        if self.G_ema is not None:
-            x_fakes = self._forward(self.G_ema, self.fixed_z, self.fixed_y).mul_(0.5).add_(0.5)
-            logger.add_images("generated/ema", x_fakes, step)
+            elif tracker.name == "wandb":
+                pass
 
 
 # reference: https://github.com/lucidrains/ema-pytorch
