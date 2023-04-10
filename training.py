@@ -1,7 +1,7 @@
 import copy
 import datetime
-from dataclasses import dataclass
-from typing import Any, Literal, Optional
+from dataclasses import dataclass, field
+from typing import Any, List, Literal, Optional
 
 import torch
 import torch.nn.functional as F
@@ -66,15 +66,16 @@ class GANTrainerConfig:
     weight_decay: float = 0
     beta1: float = 0.5
     beta2: float = 0.999
-    n_steps: int = 10000
+    n_steps: int = 10_000
     ema: bool = False
     ema_decay: float = 0.999
-    checkpoint_interval: int = 10000
+    checkpoint_interval: int = 10_000
     checkpoint_path: str = "checkpoints"
     resume_from_checkpoint: Optional[str] = None
+    loggers: List[str] = field(default_factory=list)
     log_name: str = "gan"
     log_interval: int = 50
-    log_img_interval: int = 1000
+    log_img_interval: int = 1_000
 
 
 class GANTrainer:
@@ -85,11 +86,10 @@ class GANTrainer:
         config.lr_g = config.lr_g or config.lr
 
         now = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        config.log_name += "/" + now
-        config.checkpoint_path += config.log_name
+        config.checkpoint_path += config.log_name + "/" + now
 
         cuda_speed_up()
-        accelerator = Accelerator(log_with=["tensorboard"], logging_dir="logs")
+        accelerator = Accelerator(log_with=config.loggers, project_dir="logs")
         rank_zero = accelerator.is_main_process
 
         # spectral norm and Accelerate's fp32 wrapper will throw error to copy.deepcopy
@@ -293,7 +293,11 @@ class GANTrainer:
                 tracker.tracker.add_images(tag, imgs, step)
 
             elif tracker.name == "wandb":
-                pass
+                import wandb
+
+                imgs_np = imgs.cpu().permute(0, 2, 3, 1).numpy()
+                wandb_imgs = [wandb.Image(img) for img in imgs_np]
+                tracker.tracker.log({tag: wandb_imgs}, step=step)
 
 
 # reference: https://github.com/lucidrains/ema-pytorch

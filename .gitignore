@@ -6,8 +6,13 @@ test_images/
 logs/
 fonts/
 checkpoints/
+nvidia_ops/
+wandb/
 
 *.mp4
 *.pkl
 *.bin
 *.pt
+*.png
+*.jpg
+*.jpeg

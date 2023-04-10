@@ -28,6 +28,11 @@ def add_args_from_cls(parser: argparse.ArgumentParser, cls):
             assert args[0] in (int, float, str)
             parser.add_argument(f"--{k}", type=args[0], default=v.default)
 
+        elif get_origin(arg_type) is list:
+            # NOTE: the default list is shared
+            (item_type,) = get_args(arg_type)
+            parser.add_argument(f"--{k}", type=item_type, nargs="+", default=[])
+
         else:
             raise ValueError(f"Unsupported type {arg_type}")
 
