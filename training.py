@@ -86,7 +86,7 @@ class GANTrainer:
         config.lr_g = config.lr_g or config.lr
 
         now = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        config.checkpoint_path += config.log_name + "/" + now
+        config.checkpoint_path += f"/{config.log_name}/{now}"
 
         cuda_speed_up()
         accelerator = Accelerator(log_with=config.loggers, project_dir="logs")
@@ -116,7 +116,8 @@ class GANTrainer:
         if config.resume_from_checkpoint is not None:
             accelerator.load_state(config.resume_from_checkpoint)
 
-        accelerator.init_trackers(config.log_name, config=vars(config))
+        _config = {k: str(v) if not isinstance(v, (int, float, bool, str)) else v for k, v in vars(config).items()}
+        accelerator.init_trackers(config.log_name, config=_config)
         accelerator.print(config, AcceleratorState(), D, G, optim_d, optim_g, sep="\n")
         accelerator.print(f"D: {count_params(D)/1e6:.2f}M params")
         accelerator.print(f"G: {count_params(G)/1e6:.2f}M params")
@@ -285,17 +286,18 @@ class GANTrainer:
 
     @torch.inference_mode()
     def log_images(self, imgs: Tensor, tag: str, step: int):
-        if not self.accelerator.is_main_process:
+        if not self.accelerator.is_main_process or len(self.accelerator.trackers) == 0:
             return
+
+        imgs_np = imgs.cpu().clip_(-1, 1).add_(1).mul_(255 / 2).byte().permute(0, 2, 3, 1).numpy()
 
         for tracker in self.accelerator.trackers:
             if tracker.name == "tensorboard":
-                tracker.tracker.add_images(tag, imgs, step)
+                tracker.tracker.add_images(tag, imgs_np, step, dataformats="NHWC")
 
             elif tracker.name == "wandb":
                 import wandb
 
-                imgs_np = imgs.cpu().permute(0, 2, 3, 1).numpy()
                 wandb_imgs = [wandb.Image(img) for img in imgs_np]
                 tracker.tracker.log({tag: wandb_imgs}, step=step)
 
