@@ -59,6 +59,28 @@ Progressive GAN
 python gan_celeba.py --model progressive_gan --method wgan-gp --img_size 256 --z_dim 512 --log_name celeba_progressive_gan --batch_size 16 --n_steps 100000 --optimizer Adam --beta1 0 --beta2 0.99 --lr 1e-3 --ema --drift_penalty 0.001
 ```
 
+### Usage with HF's Accelerate
+
+Mixed-precision training
+
+```bash
+accelerate launch --mixed_precision fp16 gan_celeba.py ...
+```
+
+DDP training (w/ mixed-precision) (not so useful since GANs typically cannot use large batch size)
+
+```bash
+accelerate launch --num_processes 4 gan_celeba.py ...
+```
+
+With `torch.compile()` and mixed-precision training (there are some errors...)
+
+```bash
+accelerate launch --mixed_precision fp16 --dynamo_backend inductor gan_celeba.py ...
+```
+
+For other options, see `accelerate -h` or [here](https://huggingface.co/docs/accelerate/basic_tutorials/launch).
+
 ## Lessons
 
 Some lessons I have learned from implementing and training GANs:
