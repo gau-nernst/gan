@@ -35,9 +35,10 @@ class MinibatchStdDev(nn.Module):
         self.group_size = group_size
 
     def forward(self, imgs: Tensor):
-        _, c, h, w = imgs.shape
-        std = imgs.view(self.group_size, -1, c, h, w).std(dim=0, unbiased=False)
-        std = std.mean([1, 2, 3], keepdim=True).repeat(self.group_size, 1, h, w)
+        b, c, h, w = imgs.shape
+        std = imgs.view(self.group_size, -1, c, h, w).std(0, unbiased=False)
+        std = std.mean([1, 2, 3], keepdim=True)
+        std = std.repeat_interleave(self.group_size, 0).expand(b, 1, h, w)
         return torch.cat([imgs, std], dim=1)
 
 

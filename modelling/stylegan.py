@@ -7,50 +7,34 @@
 
 import math
 from dataclasses import dataclass, replace
-from functools import partial
 from typing import Optional
 
 import torch
 from torch import Tensor, nn
 
-from .base import _Act, conv1x1, conv3x3
+from .base import conv1x1, conv3x3
 from .nvidia_ops import PixelNorm, up_conv_blur
-from .progressive_gan import Discriminator, init_weights
+from .progressive_gan import Discriminator, ProgressiveGANConfig, init_weights
 
 
 @dataclass
-class StyleGANConfig:
-    img_size: int = 128  # basics
-    img_depth: int = 3
-    z_dim: int = 512
+class StyleGANConfig(ProgressiveGANConfig):
     w_dim: int = 512
     mapping_network_depth: int = 8  # mapping network
     w_mean_beta: float = 0.995
     style_mixing: float = 0.9
     truncation_psi: float = 0.7
     truncation_cutoff: int = 8
-    smallest_map_size: int = 4  # synthesis network
     input_depth: int = 512
-    base_depth: int = 16
-    max_depth: int = 512
-    act: _Act = partial(nn.LeakyReLU, 0.2, True)  # others
-    blur_size: int = 3
+    blur_size: int = 3  # override ProgressiveGAN
+    norm: None = None
 
 
 class Discriminator(Discriminator):
     def __init__(self, config: Optional[StyleGANConfig] = None, **kwargs):
         config = config or StyleGANConfig()
         config = replace(config, **kwargs)
-        super().__init__(
-            img_size=config.img_size,
-            img_depth=config.img_depth,
-            base_depth=config.base_depth,
-            max_depth=config.max_depth,
-            smallest_map_size=config.smallest_map_size,
-            residual=False,
-            act=config.act,
-            blur_size=config.blur_size,
-        )
+        super().__init__(config)
 
 
 class MappingNetwork(nn.Module):

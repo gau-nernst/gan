@@ -20,23 +20,15 @@ from .stylegan import MappingNetwork, StyleGANConfig
 
 @dataclass
 class StyleGAN2Config(StyleGANConfig):
-    blur_size: int = 4  # override stylegan
+    blur_size: int = 4  # override StyleGAN
+    residual_D: bool = True
 
 
 class Discriminator(Discriminator):
     def __init__(self, config: Optional[StyleGAN2Config] = None, **kwargs):
         config = config or StyleGAN2Config()
         config = replace(config, **kwargs)
-        super().__init__(
-            img_size=config.img_size,
-            img_depth=config.img_depth,
-            base_depth=config.base_depth,
-            max_depth=config.max_depth,
-            smallest_map_size=config.smallest_map_size,
-            residual=True,
-            act=config.act,
-            blur_size=config.blur_size,
-        )
+        super().__init__(config)
 
 
 class ModulatedConv2d(nn.Module):

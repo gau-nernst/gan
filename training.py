@@ -235,7 +235,7 @@ class GANTrainer:
         else:
             raise ValueError(f"Unsupported method {method}")
 
-        # for Progressive GAN. may remove?
+        # for Progressive GAN only. may remove?
         if self.config.drift_penalty > 0:
             loss_d = loss_d + d_reals.square().mean() * self.config.drift_penalty
 

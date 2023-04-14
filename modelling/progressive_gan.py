@@ -9,6 +9,7 @@
 # https://github.com/tkarras/progressive_growing_of_gans
 
 import math
+from dataclasses import dataclass, replace
 from functools import partial
 from typing import Optional
 
@@ -19,62 +20,75 @@ from .base import _Act, _Norm, conv1x1, conv3x3, conv_norm_act
 from .nvidia_ops import EqualizedLR, MinibatchStdDev, PixelNorm, blur_conv_down, up_conv_blur
 
 
+@dataclass
+class ProgressiveGANConfig:
+    img_size: int = 128
+    img_depth: int = 3
+    z_dim: int = 512
+    base_depth: int = 16
+    max_depth: int = 512
+    smallest_map_size: int = 4
+    norm: _Norm = PixelNorm
+    act: _Act = partial(nn.LeakyReLU, 0.2, True)
+    blur_size: Optional[int] = None
+    residual_D: bool = False
+
+
 class DiscriminatorStage(nn.Module):
     def __init__(
         self,
         in_dim: int,
         out_dim: int,
-        residual: bool = False,
-        act: _Act = partial(nn.LeakyReLU, 0.2, True),
-        blur_size: Optional[int] = None,
+        config: ProgressiveGANConfig,
     ):
         super().__init__()
-        conv_act = partial(conv_norm_act, order=["conv", "act"], conv=conv3x3, act=act)
-        down_conv = partial(blur_conv_down, blur_size=blur_size)
-
+        conv_act = ["conv", "act"]
+        down_conv = partial(blur_conv_down, kernel_size=3, blur_size=config.blur_size)
         self.main = nn.Sequential(
-            conv_act(in_dim, in_dim),
-            conv_act(in_dim, out_dim, conv=partial(down_conv, kernel_size=3)),
+            conv_norm_act(in_dim, in_dim, conv_act, act=config.act),
+            conv_norm_act(in_dim, out_dim, conv_act, down_conv, act=config.act),
         )
-        self.shortcut = down_conv(in_dim, out_dim, 1) if residual else None  # skip-connection in StyleGAN2
+        # skip-connection in StyleGAN2
+        self.shortcut = down_conv(in_dim, out_dim, kernel_size=1) if config.residual_D else None
 
     def forward(self, imgs: Tensor):
         out = self.main(imgs)
-        if self.shortcut is not None:  # skip-connection in StyleGAN2
+
+        # skip-connection in StyleGAN2
+        if self.shortcut is not None:
             out = (out + self.shortcut(imgs)) * 2 ** (-0.5)
         return out
 
 
 class Discriminator(nn.Module):
-    def __init__(
-        self,
-        img_size,
-        img_depth: int = 3,
-        base_depth: int = 16,
-        max_depth: int = 512,
-        smallest_map_size: int = 4,
-        residual: bool = False,
-        act: _Act = partial(nn.LeakyReLU, 0.2, True),
-        blur_size: Optional[int] = None,
-    ):
-        assert img_size > 4 and math.log2(img_size).is_integer()
+    def __init__(self, config: Optional[ProgressiveGANConfig] = None, **kwargs):
+        config = config or ProgressiveGANConfig()
+        config = replace(config, **kwargs)
+        assert config.img_size > 4 and math.log2(config.img_size).is_integer()
         super().__init__()
-        conv_act = partial(conv_norm_act, order=["conv", "act"], conv=conv3x3, act=act)
-        stage = partial(DiscriminatorStage, act=act, residual=residual, blur_size=blur_size)
 
-        self.layers = nn.Sequential()
-        self.layers.append(conv_act(img_depth, base_depth, conv=conv1x1))
+        base_depth = config.base_depth
+        img_size = config.img_size
+        conv_act = ["conv", "act"]
 
-        while img_size > smallest_map_size:
-            out_depth = min(base_depth * 2, max_depth)
-            self.layers.append(stage(base_depth, out_depth))
+        self.from_rgb = conv_norm_act(config.img_depth, base_depth, conv_act, conv1x1, act=config.act)
+        self.stages = nn.Sequential()
+
+        while img_size > config.smallest_map_size:
+            out_depth = min(base_depth * 2, config.max_depth)
+            self.stages.append(DiscriminatorStage(base_depth, out_depth, config))
             base_depth = out_depth
             img_size //= 2
 
-        self.layers.append(MinibatchStdDev())
-        self.layers.append(conv_act(base_depth + 1, base_depth))
-        self.layers.append(conv_act(base_depth, base_depth, conv=partial(nn.Conv2d, kernel_size=smallest_map_size)))
-        self.layers.append(conv1x1(base_depth, 1))
+        last_conv = partial(nn.Conv2d, kernel_size=config.smallest_map_size)
+        self.stages.append(
+            nn.Sequential(
+                MinibatchStdDev(),
+                conv_norm_act(base_depth + 1, base_depth, conv_act, act=config.act),
+                conv_norm_act(base_depth, base_depth, conv_act, last_conv, act=config.act),
+                conv1x1(base_depth, 1),
+            )
+        )
 
         self.reset_parameters()
 
@@ -85,49 +99,57 @@ class Discriminator(nn.Module):
         raise NotImplementedError
 
     def forward(self, imgs: Tensor):
-        return self.layers(imgs).view(-1)
+        out = self.from_rgb(imgs)
+        out = self.stages(out)
+        return out.view(-1)
+
+
+class GeneratorStage(nn.Sequential):
+    def __init__(
+        self,
+        in_depth: int,
+        out_depth: int,
+        config: ProgressiveGANConfig,
+        first_stage: bool = False,
+    ):
+        if first_stage:
+            up_conv = partial(nn.ConvTranspose2d, kernel_size=config.smallest_map_size)
+        else:
+            up_conv = partial(up_conv_blur, kernel_size=3, blur_size=config.blur_size)
+        order = ["conv", "act", "norm"]
+        super().__init__(
+            conv_norm_act(in_depth, out_depth, order, up_conv, config.norm, config.act),
+            conv_norm_act(out_depth, out_depth, order, conv3x3, config.norm, config.act),
+        )
 
 
 class Generator(nn.Module):
-    def __init__(
-        self,
-        img_size: int,
-        img_depth: int = 3,
-        z_dim: int = 512,
-        base_depth: int = 16,
-        max_depth: int = 512,
-        smallest_map_size: int = 4,
-        norm: _Norm = PixelNorm,
-        act: _Act = partial(nn.LeakyReLU, 0.2, True),
-        blur_size: Optional[int] = None,
-    ):
-        assert img_size > 4 and math.log2(img_size).is_integer()
+    def __init__(self, config: Optional[ProgressiveGANConfig] = None, **kwargs):
+        config = config or ProgressiveGANConfig()
+        config = replace(config, **kwargs)
+        assert config.img_size > 4 and math.log2(config.img_size).is_integer()
         super().__init__()
-        up_conv3x3 = partial(up_conv_blur, kernel_size=3, blur_size=blur_size)
-        conv_act_norm = partial(conv_norm_act, order=["conv", "act", "norm"], conv=conv3x3, act=act, norm=norm)
+        self.config = config
 
-        in_depth = z_dim
-        depth = base_depth * img_size // smallest_map_size
-        out_depth = min(depth, max_depth)
+        in_depth = config.z_dim
+        smallest_map_size = config.smallest_map_size
+        depth = config.base_depth * config.img_size // smallest_map_size
+        out_depth = min(depth, config.max_depth)
 
-        self.layers = nn.Sequential()
-        self.layers.append(norm(in_depth))
-        self.layers.append(
-            conv_act_norm(in_depth, out_depth, conv=partial(nn.ConvTranspose2d, kernel_size=smallest_map_size))
-        )
-        self.layers.append(conv_act_norm(out_depth, out_depth))
+        self.input_norm = config.norm(in_depth)
+        self.stages = nn.Sequential()
+        self.stages.append(GeneratorStage(in_depth, out_depth, config, True))
         in_depth = out_depth
         depth //= 2
 
-        while smallest_map_size < img_size:
-            out_depth = min(depth, max_depth)
-            self.layers.append(conv_act_norm(in_depth, out_depth, conv=up_conv3x3))
-            self.layers.append(conv_act_norm(out_depth, out_depth))
+        while smallest_map_size < config.img_size:
+            out_depth = min(depth, config.max_depth)
+            self.stages.append(GeneratorStage(in_depth, out_depth, config))
             in_depth = out_depth
             depth //= 2
             smallest_map_size *= 2
 
-        self.layers.append(conv1x1(in_depth, img_depth))
+        self.to_rgb = conv1x1(in_depth, config.img_depth)
 
         self.reset_parameters()
 
@@ -138,7 +160,11 @@ class Generator(nn.Module):
         raise NotImplementedError
 
     def forward(self, z_embs: Tensor):
-        return self.layers(z_embs.view(*z_embs.shape, 1, 1))
+        out = z_embs.view(*z_embs.shape, 1, 1)
+        out = self.input_norm(out)
+        out = self.stages(out)
+        out = self.to_rgb(out)
+        return out
 
 
 def init_weights(module: nn.Module):
