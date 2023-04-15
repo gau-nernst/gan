@@ -35,8 +35,8 @@ def main():
     fixed_z = torch.randn((n_log_imgs, args.z_dim))
     fixed_y = torch.arange(y_dim).repeat_interleave(n_log_imgs // y_dim)
 
-    d_kwargs = dict(img_size=32, img_depth=1)
-    g_kwargs = dict(img_size=32, img_depth=1, z_dim=args.z_dim)
+    d_kwargs = dict(img_size=32, img_channels=1)
+    g_kwargs = dict(img_size=32, img_channels=1, z_dim=args.z_dim)
 
     if args.model == "sagan":
         if args.conditional:
@@ -48,7 +48,7 @@ def main():
     elif args.model in ("dcgan", "progressive_gan", "stylegan", "stylegan2"):
         yemb_dim = 64
         if args.conditional:
-            d_kwargs["img_depth"] += yemb_dim
+            d_kwargs["img_channels"] += yemb_dim
             g_kwargs["z_dim"] += yemb_dim
 
         model = getattr(modelling, args.model)

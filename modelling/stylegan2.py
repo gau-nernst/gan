@@ -72,7 +72,7 @@ class GeneratorBlock(nn.Module):
 
 class RGBLayer(ModulatedConv2d):
     def __init__(self, in_dim: int, config: StyleGAN2Config):
-        super().__init__(in_dim, config.img_depth, 1, config.w_dim, demodulation=False)
+        super().__init__(in_dim, config.img_channels, 1, config.w_dim, demodulation=False)
 
 
 class Generator(nn.Module):
@@ -88,8 +88,8 @@ class Generator(nn.Module):
         self.learned_input = nn.Parameter(torch.empty(1, in_depth, map_size, map_size))
         self.up_blur = Blur(config.blur_size, up=2)
 
-        depth = config.base_depth * config.img_size // map_size
-        out_depth = min(depth, config.max_depth)
+        depth = config.min_channels * config.img_size // map_size
+        out_depth = min(depth, config.max_channels)
 
         self.first_block = GeneratorBlock(in_depth, out_depth, config)
         self.first_to_rgb = RGBLayer(out_depth, config)
@@ -98,7 +98,7 @@ class Generator(nn.Module):
 
         self.stages = nn.ModuleList()
         while map_size < config.img_size:
-            out_depth = min(depth, config.max_depth)
+            out_depth = min(depth, config.max_channels)
             stage = dict(
                 block1=GeneratorBlock(in_depth, out_depth, config, upsample=True),
                 block2=GeneratorBlock(out_depth, out_depth, config),

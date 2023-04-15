@@ -18,7 +18,7 @@ class Discriminator(nn.Module):
     def __init__(
         self,
         img_size: int = 64,
-        img_depth: int = 3,
+        img_channels: int = 3,
         smallest_map_size: int = 4,
         base_depth: int = 64,
         norm: _Norm = partial(nn.BatchNorm2d, track_running_stats=False),
@@ -31,7 +31,7 @@ class Discriminator(nn.Module):
         _conv_norm_act = partial(conv_norm_act, conv=conv, norm=norm, act=act)
 
         self.layers = nn.Sequential()
-        self.layers.append(_conv_norm_act(img_depth, base_depth))
+        self.layers.append(_conv_norm_act(img_channels, base_depth))
         img_size //= 2
 
         # add strided conv until image size = 4
@@ -56,7 +56,7 @@ class Generator(nn.Module):
     def __init__(
         self,
         img_size: int = 64,
-        img_depth: int = 3,
+        img_channels: int = 3,
         z_dim: int = 128,
         smallest_map_size: int = 4,
         base_depth: int = 64,
@@ -83,7 +83,7 @@ class Generator(nn.Module):
             smallest_map_size *= 2
 
         # last layer use tanh activation
-        self.layers.append(nn.ConvTranspose2d(depth, img_depth, 4, 2, 1))  # TODO: check if the last layer has bias
+        self.layers.append(nn.ConvTranspose2d(depth, img_channels, 4, 2, 1))  # TODO: check if the last layer has bias
         self.layers.append(nn.Tanh())
 
         self.reset_parameters()

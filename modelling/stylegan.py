@@ -124,8 +124,8 @@ class Generator(nn.Module):
         in_depth = config.input_depth
         self.learned_input = nn.Parameter(torch.empty(1, in_depth, map_size, map_size))
 
-        depth = config.base_depth * config.img_size // map_size
-        out_depth = min(depth, config.max_depth)
+        depth = config.min_channels * config.img_size // map_size
+        out_depth = min(depth, config.max_channels)
 
         self.layers = nn.ModuleList()
         self.layers.append(GeneratorBlock(in_depth, in_depth, config, first_block=True))
@@ -134,14 +134,14 @@ class Generator(nn.Module):
         depth //= 2
 
         while map_size < config.img_size:
-            out_depth = min(depth, config.max_depth)
+            out_depth = min(depth, config.max_channels)
             self.layers.append(GeneratorBlock(in_depth, out_depth, config, upsample=True))
             self.layers.append(GeneratorBlock(out_depth, out_depth, config))
             in_depth = out_depth
             depth //= 2
             map_size *= 2
 
-        self.out_conv = conv1x1(in_depth, config.img_depth)
+        self.out_conv = conv1x1(in_depth, config.img_channels)
 
         self.reset_parameters()
 

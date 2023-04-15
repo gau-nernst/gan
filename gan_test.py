@@ -7,16 +7,16 @@ from modelling.nvidia_ops import Blur, UpFIRDn2d, upfirdn2d
 
 
 IMG_SIZE = 64
-IMG_DEPTH = 3
+IMG_CHANNELS = 3
 Z_DIM = 128
-BATCH_SIZE = 4
-IMG_SHAPE = (BATCH_SIZE, IMG_DEPTH, IMG_SIZE, IMG_SIZE)
+BATCH_SIZE = 8
+IMG_SHAPE = (BATCH_SIZE, IMG_CHANNELS, IMG_SIZE, IMG_SIZE)
 NOISE_SHAPE = (BATCH_SIZE, Z_DIM)
 
 
 @pytest.mark.parametrize("module", (dcgan, progressive_gan, stylegan, stylegan2, sagan))
 def test_discriminator(module):
-    D = module.Discriminator(img_size=IMG_SIZE, img_depth=IMG_DEPTH)
+    D = module.Discriminator(img_size=IMG_SIZE, img_channels=IMG_CHANNELS)
     assert hasattr(D, "reset_parameters")
     out = D(torch.randn(IMG_SHAPE))
     assert out.shape == (BATCH_SIZE,)
@@ -25,11 +25,33 @@ def test_discriminator(module):
 
 @pytest.mark.parametrize("module", (dcgan, progressive_gan, stylegan, stylegan2, sagan))
 def test_generator(module):
-    G = module.Generator(img_size=IMG_SIZE, img_depth=IMG_DEPTH, z_dim=Z_DIM)
+    G = module.Generator(img_size=IMG_SIZE, img_channels=IMG_CHANNELS, z_dim=Z_DIM)
     assert hasattr(G, "reset_parameters")
     out = G(torch.randn(NOISE_SHAPE))
     assert out.shape == IMG_SHAPE
     out.mean().backward()
+
+
+def test_progressive_gan():
+    gen = progressive_gan.Generator(
+        img_size=IMG_SIZE,
+        img_channels=IMG_CHANNELS,
+        z_dim=Z_DIM,
+        smallest_map_size=4,
+        init_stages=2,
+    )
+    out = gen(torch.randn(NOISE_SHAPE))
+    assert out.shape[-2:] == (8, 8)
+    new_size = out.shape[-1] * 2
+
+    while new_size <= IMG_SIZE:
+        gen.grow()
+        out = gen(torch.randn(NOISE_SHAPE))
+        assert out.shape[-2:] == (new_size, new_size)
+        new_size = out.shape[-1] * 2
+
+    with pytest.raises(Exception):
+        gen.grow()
 
 
 @pytest.mark.parametrize("kernel_size", (3, 4))

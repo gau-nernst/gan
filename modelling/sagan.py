@@ -98,7 +98,7 @@ class Discriminator(nn.Module):
     def __init__(
         self,
         img_size: int,
-        img_depth: int,
+        img_channels: int,
         y_dim: Optional[int] = None,
         smallest_map_size: int = 4,
         base_depth: int = 32,
@@ -111,7 +111,7 @@ class Discriminator(nn.Module):
         super().__init__()
         block = partial(DiscriminatorBlock, act=act)
         self.layers = nn.Sequential()
-        self.layers.append(block(img_depth, base_depth, first_block=True))
+        self.layers.append(block(img_channels, base_depth, first_block=True))
         img_size //= 2
 
         while img_size > smallest_map_size:
@@ -180,7 +180,7 @@ class Generator(nn.Module):
     def __init__(
         self,
         img_size: int,
-        img_depth: int,
+        img_channels: int,
         z_dim: int,
         y_dim: Optional[int] = None,
         smallest_map_size: int = 4,
@@ -208,7 +208,7 @@ class Generator(nn.Module):
 
         self.layers.append(nn.BatchNorm2d(in_depth))
         self.layers.append(act())
-        self.layers.append(conv3x3(in_depth, img_depth))
+        self.layers.append(conv3x3(in_depth, img_channels))
         self.layers.append(nn.Tanh())
 
         self.reset_parameters()
