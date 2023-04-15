@@ -52,7 +52,7 @@ class DiscriminatorStage(nn.Module):
                 MinibatchStdDev(),
                 conv3x3(in_channels + 1, in_channels),
                 config.act(),
-                nn.Conv2d(out_channels, out_channels, config.smallest_map_size),
+                nn.Conv2d(in_channels, out_channels, config.smallest_map_size),
                 config.act(),
                 conv1x1(out_channels, 1),
             )
@@ -95,7 +95,7 @@ class Discriminator(nn.Module):
 
         in_channels = config.min_channels
         for i in range(self.total_stages):
-            out_channels = min(config.min_channels * 2**i, config.min_channels)
+            out_channels = min(config.min_channels * 2 ** (i + 1), config.max_channels)
             self.from_rgb.append(nn.Sequential(conv1x1(config.img_channels, in_channels), config.act()))
             self.stages.append(DiscriminatorStage(in_channels, out_channels, config, i == self.total_stages - 1))
             in_channels = out_channels
@@ -165,7 +165,7 @@ class Generator(nn.Module):
         in_channels = config.z_dim
         first_out_channels = self.config.min_channels * self.config.img_size // self.config.smallest_map_size
         for i in range(self.total_stages):
-            out_channels = max(first_out_channels // 2**i, config.max_channels)
+            out_channels = min(first_out_channels // 2**i, config.max_channels)
             self.stages.append(GeneratorStage(in_channels, out_channels, config, i == 0))
             self.to_rgb.append(conv1x1(out_channels, config.img_channels))
             in_channels = out_channels
