@@ -61,6 +61,12 @@ python gan_celeba.py --model progressive_gan --method wgan-gp --img_size 256 --z
 
 ### Usage with HF's Accelerate
 
+Run `accelerate config` to create a default configuration. Then you can launch as:
+
+```bash
+accelerate launch gan_celeba.py ...
+```
+
 Mixed-precision training
 
 ```bash
