@@ -30,7 +30,7 @@ class ProgressiveGANConfig:
     min_channels: int = 16
     max_channels: int = 512
     smallest_map_size: int = 4
-    init_stages: Optional[int] = None
+    init_img_size: Optional[int] = None
     grow_interval: int = 50_000
     norm: _Norm = PixelNorm
     act: _Act = partial(nn.LeakyReLU, 0.2, True)
@@ -41,19 +41,34 @@ class ProgressiveGANConfig:
 class DiscriminatorStage(nn.Module):
     def __init__(
         self,
-        in_dim: int,
-        out_dim: int,
+        in_channels: int,
+        out_channels: int,
         config: ProgressiveGANConfig,
+        last_stage: bool = False,
     ):
         super().__init__()
-        conv_act = ["conv", "act"]
-        down_conv = partial(blur_conv_down, kernel_size=3, blur_size=config.blur_size)
-        self.main = nn.Sequential(
-            conv_norm_act(in_dim, in_dim, conv_act, act=config.act),
-            conv_norm_act(in_dim, out_dim, conv_act, down_conv, act=config.act),
-        )
+        if last_stage:
+            self.main = nn.Sequential(
+                MinibatchStdDev(),
+                conv3x3(in_channels + 1, in_channels),
+                config.act(),
+                nn.Conv2d(out_channels, out_channels, config.smallest_map_size),
+                config.act(),
+                conv1x1(out_channels, 1),
+            )
+        else:
+            self.main = nn.Sequential(
+                conv3x3(in_channels, in_channels),
+                config.act(),
+                blur_conv_down(in_channels, out_channels, 3, config.blur_size),
+                config.act(),
+            )
+
         # skip-connection in StyleGAN2
-        self.shortcut = down_conv(in_dim, out_dim, kernel_size=1) if config.residual_D else None
+        if config.residual_D and not last_stage:
+            self.shortcut = blur_conv_down(in_channels, out_channels, 1, config.blur_size)
+        else:
+            self.shortcut = None
 
     def forward(self, imgs: Tensor):
         out = self.main(imgs)
@@ -71,73 +86,43 @@ class Discriminator(nn.Module):
         assert config.img_size > 4 and math.log2(config.img_size).is_integer()
         super().__init__()
         self.config = config
-        self.num_stages = int(math.log2(config.img_size // config.smallest_map_size)) + 1
+        self.total_stages = int(math.log2(config.img_size // config.smallest_map_size)) + 1
+        self.num_stages = int(math.log2((config.init_img_size or config.img_size) // config.smallest_map_size)) + 1
         self.grow_counter = 0
 
-        init_stages = config.init_stages or self.num_stages
-        self.from_rgb = nn.Sequential(
-            conv1x1(config.img_channels, self._get_in_channels(self.num_stages - init_stages)),
-            config.act(),
-        )
-        self.prev_from_rgb = None
+        self.from_rgb = nn.ModuleList()
+        self.stages = nn.ModuleList()
 
-        self.stages = nn.Sequential()
-        for i in range(self.num_stages - init_stages, self.num_stages - 1):
-            self.stages.append(DiscriminatorStage(self._get_in_channels(i), self._get_in_channels(i + 1), config))
-
-        last_channels = self._get_in_channels(self.num_stages - 1)
-        self.stages.append(
-            nn.Sequential(
-                MinibatchStdDev(),
-                conv3x3(last_channels + 1, last_channels),
-                config.act(),
-                nn.Conv2d(last_channels, last_channels, config.smallest_map_size),
-                config.act(),
-                conv1x1(last_channels, 1),
-            )
-        )
+        in_channels = config.min_channels
+        for i in range(self.total_stages):
+            out_channels = min(config.min_channels * 2**i, config.min_channels)
+            self.from_rgb.append(nn.Sequential(conv1x1(config.img_channels, in_channels), config.act()))
+            self.stages.append(DiscriminatorStage(in_channels, out_channels, config, i == self.total_stages - 1))
+            in_channels = out_channels
 
         self.reset_parameters()
 
     def reset_parameters(self):
         self.apply(init_weights)
 
-    def _get_in_channels(self, idx: int):
-        if idx < 0 or idx >= self.num_stages:
-            raise ValueError
-        channels = self.config.min_channels * int(2**idx)
-        return min(channels, self.config.max_channels)
-
     def grow(self):
-        n = len(self.stages)
-        if n >= self.num_stages:
+        if self.num_stages >= self.total_stages:
             raise RuntimeError("Cannot grow anymore")
-
-        i = self.num_stages - n
-        stages = nn.Sequential(DiscriminatorStage(self._get_in_channels(i - 1), self._get_in_channels(i), self.config))
-        stages.extend(self.stages)
-        self.stages = stages
-
-        self.prev_from_rgb = self.from_rgb
-        self.from_rgb = nn.Sequential(
-            conv1x1(self.config.img_channels, self._get_in_channels(i - 1)),
-            self.config.act(),
-        )
-
+        self.num_stages += 1
         self.grow_counter = self.config.grow_interval
 
     def forward(self, imgs: Tensor):
-        out = self.from_rgb(imgs)
-        out = self.stages[0](out)
+        out = self.from_rgb[-self.num_stages](imgs)
+        out = self.stages[-self.num_stages](out)
 
         if self.grow_counter > 0:
             # F.interpolate() is 20% faster than F.avg_pool() on RTX 3090
             prev_out = F.interpolate(imgs, scale_factor=0.5, mode="bilinear")
-            prev_out = self.prev_from_rgb(prev_out)
+            prev_out = self.from_rgb[-self.num_stages + 1](prev_out)
             out = torch.lerp(prev_out, out, self.grow_counter / self.config.grow_interval)
             self.grow_counter -= 1
 
-        for stage in self.stages[1:]:
+        for stage in self.stages[-self.num_stages + 1 :]:
             out = stage(out)
         return out.view(-1)
 
@@ -168,54 +153,43 @@ class Generator(nn.Module):
         assert config.img_size > 4 and math.log2(config.img_size).is_integer()
         super().__init__()
         self.config = config
-        self.num_stages = int(math.log2(config.img_size // config.smallest_map_size)) + 1
+        self.total_stages = int(math.log2(config.img_size // config.smallest_map_size)) + 1
+        self.num_stages = int(math.log2((config.init_img_size or config.img_size) // config.smallest_map_size)) + 1
         self.grow_counter = 0
 
         self.input_norm = config.norm(config.z_dim)
 
-        self.stages = nn.Sequential()
-        self.stages.append(GeneratorStage(config.z_dim, self._get_out_channels(0), config, first_stage=True))
+        self.stages = nn.ModuleList()
+        self.to_rgb = nn.ModuleList()
 
-        init_stages = config.init_stages or self.num_stages
-        for i in range(1, init_stages):
-            self.stages.append(GeneratorStage(self._get_out_channels(i - 1), self._get_out_channels(i), config))
-
-        self.to_rgb = conv1x1(self._get_out_channels(init_stages - 1), config.img_channels)
-        self.prev_to_rgb = None
+        in_channels = config.z_dim
+        first_out_channels = self.config.min_channels * self.config.img_size // self.config.smallest_map_size
+        for i in range(self.total_stages):
+            out_channels = max(first_out_channels // 2**i, config.max_channels)
+            self.stages.append(GeneratorStage(in_channels, out_channels, config, i == 0))
+            self.to_rgb.append(conv1x1(out_channels, config.img_channels))
+            in_channels = out_channels
 
         self.reset_parameters()
 
     def reset_parameters(self):
         self.apply(init_weights)
 
-    def _get_out_channels(self, idx: int):
-        if idx < 0 or idx >= self.num_stages:
-            raise ValueError
-        channels = self.config.min_channels * self.config.img_size // self.config.smallest_map_size // 2**idx
-        return min(channels, self.config.max_channels)
-
     def grow(self):
-        n = len(self.stages)
-        if n >= self.num_stages:
+        if self.num_stages >= self.total_stages:
             raise RuntimeError("Cannot grow anymore")
-
-        self.stages.append(GeneratorStage(self._get_out_channels(n - 1), self._get_out_channels(n), self.config))
-        self.stages[-1].apply(init_weights)
-
-        self.prev_to_rgb = self.to_rgb
-        self.to_rgb = conv1x1(self._get_out_channels(n), self.config.img_channels)
-        self.to_rgb.apply(init_weights)
-
+        self.num_stages += 1
         self.grow_counter = self.config.grow_interval
 
     def forward(self, z_embs: Tensor):
         out = self.input_norm(z_embs[..., None, None])
-        for stage in self.stages:
-            prev_out, out = out, stage(out)
-        out = self.to_rgb(out)
+        for i in range(self.num_stages):
+            prev_out, out = out, self.stages[i](out)
+
+        out = self.to_rgb[self.num_stages - 1](out)
 
         if self.grow_counter > 0:
-            prev_out = self.prev_to_rgb(prev_out)
+            prev_out = self.to_rgb[self.num_stages - 2](prev_out)
             prev_out = F.interpolate(prev_out, scale_factor=2, mode="nearest")
             out = torch.lerp(prev_out, out, self.grow_counter / self.config.grow_interval)
             self.grow_counter -= 1
