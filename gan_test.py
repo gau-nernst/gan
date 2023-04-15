@@ -33,14 +33,13 @@ def test_generator(module):
 
 
 def test_progressive_gan_discriminator():
+    size = 4
     disc = progressive_gan.Discriminator(
         img_size=IMG_SIZE,
         img_channels=IMG_CHANNELS,
         z_dim=Z_DIM,
-        smallest_map_size=4,
-        init_stages=2,
+        progressive_growing=True,
     )
-    size = 8
     out = disc(torch.randn(BATCH_SIZE, IMG_CHANNELS, size, size))
     assert out.shape == (BATCH_SIZE,)
     size *= 2
@@ -56,14 +55,13 @@ def test_progressive_gan_discriminator():
 
 
 def test_progressive_gan_generator():
+    size = 4
     gen = progressive_gan.Generator(
         img_size=IMG_SIZE,
         img_channels=IMG_CHANNELS,
         z_dim=Z_DIM,
-        smallest_map_size=4,
-        init_stages=2,
+        progressive_growing=True,
     )
-    size = 8
     out = gen(torch.randn(NOISE_SHAPE))
     assert out.shape[-2:] == (size, size)
     size *= 2

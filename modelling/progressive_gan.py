@@ -30,7 +30,7 @@ class ProgressiveGANConfig:
     min_channels: int = 16
     max_channels: int = 512
     smallest_map_size: int = 4
-    init_img_size: Optional[int] = None
+    progressive_growing: bool = False
     grow_interval: int = 50_000
     norm: _Norm = PixelNorm
     act: _Act = partial(nn.LeakyReLU, 0.2, True)
@@ -87,7 +87,7 @@ class Discriminator(nn.Module):
         super().__init__()
         self.config = config
         self.total_stages = int(math.log2(config.img_size // config.smallest_map_size)) + 1
-        self.num_stages = int(math.log2((config.init_img_size or config.img_size) // config.smallest_map_size)) + 1
+        self.num_stages = 1 if config.progressive_growing else self.total_stages
         self.grow_counter = 0
 
         self.from_rgb = nn.ModuleList()
@@ -122,8 +122,9 @@ class Discriminator(nn.Module):
             out = torch.lerp(prev_out, out, self.grow_counter / self.config.grow_interval)
             self.grow_counter -= 1
 
-        for stage in self.stages[-self.num_stages + 1 :]:
-            out = stage(out)
+        if self.num_stages > 1:
+            for stage in self.stages[-self.num_stages + 1 :]:
+                out = stage(out)
         return out.view(-1)
 
 
@@ -154,7 +155,7 @@ class Generator(nn.Module):
         super().__init__()
         self.config = config
         self.total_stages = int(math.log2(config.img_size // config.smallest_map_size)) + 1
-        self.num_stages = int(math.log2((config.init_img_size or config.img_size) // config.smallest_map_size)) + 1
+        self.num_stages = 1 if config.progressive_growing else self.total_stages
         self.grow_counter = 0
 
         self.input_norm = config.norm(config.z_dim)
