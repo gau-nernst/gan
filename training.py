@@ -5,7 +5,7 @@ from typing import Any, List, Literal, Optional
 
 import torch
 import torch.nn.functional as F
-from accelerate import Accelerator
+from accelerate import Accelerator, DistributedDataParallelKwargs
 from accelerate.state import AcceleratorState
 from torch import Tensor, nn
 from torch.utils.data import DataLoader
@@ -50,6 +50,7 @@ class GANTrainerConfig:
     conditional: bool = False
     z_dim: int = 128
     method: Literal["gan", "wgan", "wgan-gp", "hinge"] = "gan"
+    grow_interval: int = 0  # progressive growing
     spectral_norm_d: bool = False
     spectral_norm_g: bool = False
     label_smoothing: float = 0.0
@@ -76,6 +77,7 @@ class GANTrainerConfig:
     log_name: str = "gan"
     log_interval: int = 50
     log_img_interval: int = 1_000
+    find_unused_parameters: bool = False
 
 
 class GANTrainer:
@@ -84,12 +86,18 @@ class GANTrainer:
         config = copy.deepcopy(config)
         config.lr_d = config.lr_d or config.lr
         config.lr_g = config.lr_g or config.lr
+        if config.grow_interval > 0:
+            assert hasattr(D, "grow") and hasattr(G, "grow")
 
         now = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         config.checkpoint_path += f"/{config.log_name}/{now}"
 
         cuda_speed_up()
-        accelerator = Accelerator(log_with=config.loggers, project_dir="logs")
+        accelerator = Accelerator(
+            log_with=config.loggers,
+            project_dir="logs",
+            kwargs_handlers=[DistributedDataParallelKwargs(find_unused_parameters=config.find_unused_parameters)],
+        )
         rank_zero = accelerator.is_main_process
 
         # spectral norm and Accelerate's fp32 wrapper will throw error to copy.deepcopy
@@ -157,18 +165,23 @@ class GANTrainer:
         return optim_d, optim_g
 
     def train(self, dloader: DataLoader):
+        cfg = self.config
         dloader = self.accelerator.prepare(dloader)
         step = 0
 
         pbar = tqdm(
             cycle(dloader),
-            total=self.config.n_steps,
+            total=cfg.n_steps,
             leave=False,
             dynamic_ncols=True,
             disable=not self.accelerator.is_main_process,
         )
+        img_size = 4
         for x_reals, ys in pbar:
-            if step % self.config.log_img_interval == 0 and self.accelerator.is_main_process:
+            if cfg.grow_interval > 0 and x_reals.shape[-2:] != (img_size, img_size):
+                x_reals = F.interpolate(x_reals, (img_size, img_size), mode="bilinear")
+
+            if step % cfg.log_img_interval == 0 and self.accelerator.is_main_process:
                 with torch.inference_mode():
                     x_fakes = self._forward(self.G_ema or self.G, self.fixed_z, self.fixed_y)
                 self.log_images(x_fakes, "generated", step)
@@ -176,22 +189,29 @@ class GANTrainer:
             log_dict: dict[str, Any] = dict()
             log_dict["loss/d"] = self.train_D_step(x_reals, ys, step).item()
 
-            if step % self.config.train_g_interval == 0:
+            if step % cfg.train_g_interval == 0:
                 log_dict["loss/g"] = self.train_G_step(x_reals, ys, step).item()
                 if self.G_ema is not None:
                     self.G_ema.update(self.G)
 
             # loss values are associated with models before the optimizer step
             # therefore, increment `step` after logging
-            if step % self.config.log_interval == 0:
+            if step % cfg.log_interval == 0:
                 self.accelerator.log(log_dict, step=step)
 
             step += 1
 
-            if step % self.config.checkpoint_interval == 0:
-                self.accelerator.save_state(f"{self.config.checkpoint_path}/step_{step:07d}")
+            if step % cfg.checkpoint_interval == 0:
+                self.accelerator.save_state(f"{cfg.checkpoint_path}/step_{step:07d}")
 
-            if step >= self.config.n_steps:
+            if cfg.grow_interval > 0 and step % cfg.grow_interval == 0:
+                self.D.grow()
+                self.G.grow()
+                if self.G_ema is not None:
+                    self.G_ema.ema_model.grow()
+                img_size *= 2
+
+            if step >= cfg.n_steps:
                 break
 
         self.accelerator.end_training()
@@ -201,58 +221,58 @@ class GANTrainer:
 
     def train_D_step(self, x_reals: Tensor, ys: Tensor, step: int):
         bsize = x_reals.shape[0]
-        method = self.config.method
+        cfg = self.config
 
-        if self.config.r1_penalty > 0 and step % self.config.r1_penalty_interval == 0:
+        if cfg.r1_penalty > 0 and step % cfg.r1_penalty_interval == 0:
             x_reals.requires_grad_()
 
         with torch.no_grad():
-            z_noise = torch.randn(bsize, self.config.z_dim, device=self.accelerator.device)
+            z_noise = torch.randn(bsize, cfg.z_dim, device=self.accelerator.device)
             x_fakes = self._forward(self.G, z_noise, ys)
         d_reals = self._forward(self.D, x_reals, ys)
         d_fakes = self._forward(self.D, x_fakes, ys)
 
-        if method == "gan":
-            loss_d_real = -F.logsigmoid(d_reals).mean() * (1.0 - self.config.label_smoothing)
+        if cfg.method == "gan":
+            loss_d_real = -F.logsigmoid(d_reals).mean() * (1.0 - cfg.label_smoothing)
             loss_d_fake = -F.logsigmoid(-d_fakes).mean()
             loss_d = loss_d_real + loss_d_fake
 
-        elif method in ("wgan", "wgan-gp"):
+        elif cfg.method in ("wgan", "wgan-gp"):
             loss_d = d_fakes.mean() - d_reals.mean()
 
-            if method == "wgan-gp":
+            if cfg.method == "wgan-gp":
                 alpha = torch.rand(bsize, 1, 1, 1, device=x_reals.device)
                 x_inters = x_reals.lerp(x_fakes, alpha).requires_grad_()
                 d_inters = self._forward(self.D, x_inters, ys)
 
                 (d_grad,) = torch.autograd.grad(d_inters.sum(), x_inters, create_graph=True)
                 d_grad_norm = torch.linalg.vector_norm(d_grad, dim=(1, 2, 3))
-                loss_d = loss_d + self.config.wgan_gp_lamb * ((d_grad_norm - 1) ** 2).mean()
+                loss_d = loss_d + cfg.wgan_gp_lamb * ((d_grad_norm - 1) ** 2).mean()
 
-        elif method == "hinge":
+        elif cfg.method == "hinge":
             loss_d = F.relu(1 - d_reals).mean() + F.relu(1 + d_fakes).mean()
 
         else:
-            raise ValueError(f"Unsupported method {method}")
+            raise ValueError(f"Unsupported method {cfg.method}")
 
         # for Progressive GAN only. may remove?
-        if self.config.drift_penalty > 0:
-            loss_d = loss_d + d_reals.square().mean() * self.config.drift_penalty
+        if cfg.drift_penalty > 0:
+            loss_d = loss_d + d_reals.square().mean() * cfg.drift_penalty
 
         # https://arxiv.org/abs/1801.04406, for StyleGAN and StyleGAN2
-        if self.config.r1_penalty > 0 and step % self.config.r1_penalty_interval == 0:
+        if cfg.r1_penalty > 0 and step % cfg.r1_penalty_interval == 0:
             (d_grad,) = torch.autograd.grad(d_reals.sum(), x_reals, create_graph=True)
             d_grad_norm2 = d_grad.square().sum() / bsize
-            loss_d = loss_d + d_grad_norm2 * self.config.r1_penalty / 2
+            loss_d = loss_d + d_grad_norm2 * cfg.r1_penalty / 2
 
         self.optim_d.zero_grad(set_to_none=True)
         self.accelerator.backward(loss_d)
         self.optim_d.step()
 
         # Algorithm 1 in paper clip weights after optimizer step, but GitHub code clip before optimizer step
-        # it doesn't seem to matter much in practice
-        if method == "wgan":
-            clip = self.config.wgan_clip
+        # it shouldn't matter much in practice
+        if cfg.method == "wgan":
+            clip = cfg.wgan_clip
             with torch.no_grad():
                 for param in self.D.parameters():
                     param.clip_(-clip, clip)
@@ -261,21 +281,21 @@ class GANTrainer:
 
     def train_G_step(self, x_reals: Tensor, ys: Tensor, step: int):
         bsize = x_reals.shape[0]
-        method = self.config.method
+        cfg = self.config
         self.D.requires_grad_(False)
 
-        z_noise = torch.randn(bsize, self.config.z_dim, device=self.accelerator.device)
+        z_noise = torch.randn(bsize, cfg.z_dim, device=self.accelerator.device)
         x_fakes = self._forward(self.G, z_noise, ys)
         d_fakes = self._forward(self.D, x_fakes, ys)
 
-        if method == "gan":
+        if cfg.method == "gan":
             loss_g = -F.logsigmoid(d_fakes).mean()
 
-        elif method in ("wgan", "wgan-gp", "hinge"):
+        elif cfg.method in ("wgan", "wgan-gp", "hinge"):
             loss_g = -d_fakes.mean()
 
         else:
-            raise ValueError(f"Unsupported method {method}")
+            raise ValueError(f"Unsupported method {cfg.method}")
 
         self.optim_g.zero_grad(set_to_none=True)
         self.accelerator.backward(loss_g)
