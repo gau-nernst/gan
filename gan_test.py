@@ -32,7 +32,30 @@ def test_generator(module):
     out.mean().backward()
 
 
-def test_progressive_gan():
+def test_progressive_gan_discriminator():
+    disc = progressive_gan.Discriminator(
+        img_size=IMG_SIZE,
+        img_channels=IMG_CHANNELS,
+        z_dim=Z_DIM,
+        smallest_map_size=4,
+        init_stages=2,
+    )
+    size = 8
+    out = disc(torch.randn(BATCH_SIZE, IMG_CHANNELS, size, size))
+    assert out.shape == (BATCH_SIZE,)
+    size *= 2
+
+    while size <= IMG_SIZE:
+        disc.grow()
+        out = disc(torch.randn(BATCH_SIZE, IMG_CHANNELS, size, size))
+        assert out.shape == (BATCH_SIZE,)
+        size *= 2
+
+    with pytest.raises(Exception):
+        disc.grow()
+
+
+def test_progressive_gan_generator():
     gen = progressive_gan.Generator(
         img_size=IMG_SIZE,
         img_channels=IMG_CHANNELS,
@@ -40,15 +63,16 @@ def test_progressive_gan():
         smallest_map_size=4,
         init_stages=2,
     )
+    size = 8
     out = gen(torch.randn(NOISE_SHAPE))
-    assert out.shape[-2:] == (8, 8)
-    new_size = out.shape[-1] * 2
+    assert out.shape[-2:] == (size, size)
+    size *= 2
 
-    while new_size <= IMG_SIZE:
+    while size <= IMG_SIZE:
         gen.grow()
         out = gen(torch.randn(NOISE_SHAPE))
-        assert out.shape[-2:] == (new_size, new_size)
-        new_size = out.shape[-1] * 2
+        assert out.shape[-2:] == (size, size)
+        size *= 2
 
     with pytest.raises(Exception):
         gen.grow()
