@@ -49,7 +49,6 @@ class GANTrainerConfig:
     conditional: bool = False
     z_dim: int = 128
     method: Literal["gan", "wgan", "wgan-gp", "hinge"] = "gan"
-    grow_interval: int = 0  # progressive growing
     spectral_norm_d: bool = False
     spectral_norm_g: bool = False
     label_smoothing: float = 0.0
@@ -86,8 +85,6 @@ class GANTrainer:
         config = copy.deepcopy(config)
         config.lr_d = config.lr_d or config.lr
         config.lr_g = config.lr_g or config.lr
-        if config.grow_interval > 0:
-            assert hasattr(D, "grow") and hasattr(G, "grow")
 
         now = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         config.checkpoint_path += f"/{config.log_name}/{now}"
@@ -200,9 +197,9 @@ class GANTrainer:
             if step % cfg.checkpoint_interval == 0:
                 self.accelerator.save_state(f"{cfg.checkpoint_path}/step_{step:07d}")
 
-            if cfg.grow_interval > 0 and step % cfg.grow_interval == 0:
-                self.D.grow()
-                self.G.grow()
+            for m in (self.D, self.G):
+                if hasattr(m, "step"):
+                    m.step()
 
             if step >= cfg.n_steps:
                 break

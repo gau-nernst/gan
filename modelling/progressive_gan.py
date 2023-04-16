@@ -36,6 +36,14 @@ class ProgressiveGANConfig:
     residual_D: bool = False
 
 
+def _get_current_stage(step: int, grow_interval: int, max_stage: int) -> tuple[int, float]:
+    if step < grow_interval:
+        return 1, 1.0
+
+    q, r = divmod(step - grow_interval, grow_interval * 2)
+    return min(q + 2, max_stage), min(r / grow_interval, 1.0)
+
+
 class DiscriminatorStage(nn.Module):
     def __init__(
         self,
@@ -85,10 +93,10 @@ class Discriminator(nn.Module):
         super().__init__()
         self.config = config
         self.total_stages = int(math.log2(config.img_size // config.init_map_size)) + 1
-        self.register_buffer("num_stages", torch.tensor(1 if config.progressive_growing else self.total_stages))
-        self.register_buffer("grow_counter", torch.tensor(0))
-        self.num_stages: Tensor
-        self.grow_counter: Tensor
+
+        step_counter = 0 if config.progressive_growing else config.grow_interval * self.total_stages * 2
+        self.register_buffer("step_counter", torch.tensor(step_counter))
+        self.step_counter: Tensor
 
         self.from_rgb = nn.ModuleList()
         self.stages = nn.ModuleList()
@@ -105,27 +113,26 @@ class Discriminator(nn.Module):
     def reset_parameters(self):
         self.apply(init_weights)
 
-    def grow(self):
-        if self.num_stages >= self.total_stages:
-            raise RuntimeError("Cannot grow anymore")
-        self.num_stages += 1
-        self.grow_counter.fill_(self.config.grow_interval)
-
     def forward(self, imgs: Tensor):
-        out = self.from_rgb[-self.num_stages](imgs)
-        out = self.stages[-self.num_stages](out)
+        curr_stage, t = _get_current_stage(self.step_counter.item(), self.config.grow_interval, self.total_stages)
 
-        if self.grow_counter > 0:
+        out = self.from_rgb[-curr_stage](imgs)
+        out = self.stages[-curr_stage](out)
+        if curr_stage == 1:
+            return out.view(-1)
+
+        if t < 1.0:
             # F.interpolate() is 20% faster than F.avg_pool() on RTX 3090
             prev_out = F.interpolate(imgs, scale_factor=0.5, mode="bilinear")
-            prev_out = self.from_rgb[-self.num_stages + 1](prev_out)
-            out = out.lerp(prev_out, self.grow_counter.to(out.dtype) / self.config.grow_interval)
-            self.grow_counter -= 1
+            prev_out = self.from_rgb[-curr_stage + 1](prev_out)
+            out = prev_out.lerp(out, t)
 
-        if self.num_stages > 1:
-            for stage in self.stages[-self.num_stages + 1 :]:
-                out = stage(out)
+        for stage in self.stages[-curr_stage + 1 :]:
+            out = stage(out)
         return out.view(-1)
+
+    def step(self):
+        self.step_counter += 1
 
 
 class GeneratorStage(nn.Sequential):
@@ -155,10 +162,10 @@ class Generator(nn.Module):
         super().__init__()
         self.config = config
         self.total_stages = int(math.log2(config.img_size // config.init_map_size)) + 1
-        self.register_buffer("num_stages", torch.tensor(1 if config.progressive_growing else self.total_stages))
-        self.register_buffer("grow_counter", torch.tensor(0))
-        self.num_stages: Tensor
-        self.grow_counter: Tensor
+
+        step_counter = 0 if config.progressive_growing else config.grow_interval * self.total_stages * 2
+        self.register_buffer("step_counter", torch.tensor(step_counter))
+        self.step_counter: Tensor
 
         self.input_norm = config.norm(config.z_dim)
 
@@ -178,26 +185,23 @@ class Generator(nn.Module):
     def reset_parameters(self):
         self.apply(init_weights)
 
-    def grow(self):
-        if self.num_stages >= self.total_stages:
-            raise RuntimeError("Cannot grow anymore")
-        self.num_stages += 1
-        self.grow_counter.fill_(self.config.grow_interval)
-
     def forward(self, z_embs: Tensor):
+        curr_stage, t = _get_current_stage(self.step_counter.item(), self.config.grow_interval, self.total_stages)
+
         out = self.input_norm(z_embs[..., None, None])
-        for i in range(self.num_stages):
+        for i in range(curr_stage):
             prev_out, out = out, self.stages[i](out)
+        out = self.to_rgb[curr_stage - 1](out)
 
-        out = self.to_rgb[self.num_stages - 1](out)
-
-        if self.grow_counter > 0:
-            prev_out = self.to_rgb[self.num_stages - 2](prev_out)
+        if t < 1.0:
+            prev_out = self.to_rgb[curr_stage - 2](prev_out)
             prev_out = F.interpolate(prev_out, scale_factor=2, mode="nearest")
-            out = out.lerp(prev_out, self.grow_counter.to(out.dtype) / self.config.grow_interval)
-            self.grow_counter -= 1
+            out = prev_out.lerp(out, t)
 
         return out
+
+    def step(self):
+        self.step_counter += 1
 
 
 def init_weights(module: nn.Module):
