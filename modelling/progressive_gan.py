@@ -2,8 +2,6 @@
 # See Table 2 for detailed model architecture
 # Discriminator supports BlurConv (StyleGAN) and skip-connections (StyleGAN2)
 # Generator has an option to use BlurConv
-# Not implemented features
-# - Progressive growing
 #
 # Code reference:
 # https://github.com/tkarras/progressive_growing_of_gans
