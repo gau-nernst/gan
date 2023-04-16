@@ -107,9 +107,8 @@ Some lessons I have learned from implementing and training GANs:
 - Optimizer: most GANs use Adam with low `beta1` (0.5 or 0.0). Some GANs (WGAN-GP, NVIDIA GANs) require `beta1=0` for stable training. WGAN uses RMSprop. I haven't experimented with other optimizers. SGD probably won't be able to optimize the minimax game. GANs also don't use weight decay.
 - Provide label information helps with GAN training. I didn't try modifying Discriminator to classify all classes + fake (suggested by [Salimans 2016](https://proceedings.neurips.cc/paper/2016/hash/8a3363abe792db2d8761d6403605aeb7-Abstract.html)), but Conditional GAN seems to speed up convergence. Conditional GAN probably prevents mode collapse also.
 - Progressive GAN:
-  - I don't implement progressive growing. (this might be important?)
-  - Training is quite unstable, even at low resolutions. Loss often becomes NaN after a while. Maybe gradient clipping is needed.
-  - Equalized learning rate helps with training stability. I have tried not using Equalized LR and scaling LR accordingly but it didn't work. I still think Equalized LR is not necessary since no other networks need that.
+  - With fp16 mixed precision, training is very unstable, even at low resolutions. Loss often becomes NaN after a while. Training at full fp32 precision has no instability.
+  - Equalized learning rate helps with training stability. (I have tried not using Equalized LR and scaling LR accordingly but it didn't work. I still think Equalized LR is not necessary since no other networks need that. TODO: re-try again with full fp32 precision)
   - I'm not sure if Discriminator output drift penalty is necessary
   - Mini-batch standard deviation in Discriminator and beta1=0 seem to be important
   - Tanh is not used in Generator (to force values in [-1,1])
