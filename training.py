@@ -30,9 +30,8 @@ def apply_spectral_normalization(module: nn.Module):
 
 
 def disable_bn_running_stats(module: nn.Module):
-    for m in module.modules():
-        if isinstance(m, nn.modules.batchnorm._BatchNorm):
-            m.track_running_stats = False
+    if isinstance(module, nn.modules.batchnorm._BatchNorm):
+        module.track_running_stats = False
 
 
 def count_params(module: nn.Module) -> int:
@@ -100,23 +99,20 @@ class GANTrainer:
         )
         rank_zero = accelerator.is_main_process
 
-        # spectral norm and Accelerate's fp32 wrapper will throw error to copy.deepcopy
-        G_ema = None
-        if config.ema and rank_zero:
-            G_ema = EMA(G, config.ema_decay, device=accelerator.device)
-            accelerator.register_for_checkpointing(G_ema)
-
         if config.spectral_norm_d:
             apply_spectral_normalization(D)
 
         if config.spectral_norm_g:
             apply_spectral_normalization(G)
-            if G_ema is not None:
-                apply_spectral_normalization(G_ema.ema_model)
+
+        # spectral norm and Accelerate's fp32 wrapper will throw error to copy.deepcopy
+        G_ema = EMA(G, config.ema_decay, device=accelerator.device, enable=config.ema and rank_zero)
+        if config.ema and rank_zero:
+            accelerator.register_for_checkpointing(G_ema)
 
         if accelerator.distributed_type == "MULTI_GPU":
-            disable_bn_running_stats(D)
-            disable_bn_running_stats(G)
+            D.apply(disable_bn_running_stats)
+            G.apply(disable_bn_running_stats)
 
         optim_d, optim_g = self.build_optimizers(config, D, G)
         D, G, optim_d, optim_g = accelerator.prepare(D, G, optim_d, optim_g)
@@ -176,14 +172,13 @@ class GANTrainer:
             dynamic_ncols=True,
             disable=not self.accelerator.is_main_process,
         )
-        img_size = 4
         for x_reals, ys in pbar:
-            if cfg.grow_interval > 0 and x_reals.shape[-2:] != (img_size, img_size):
-                x_reals = F.interpolate(x_reals, (img_size, img_size), mode="bilinear")
-
             if step % cfg.log_img_interval == 0 and self.accelerator.is_main_process:
+                self.G_ema.swap_state_dict(self.G)
                 with torch.inference_mode():
-                    x_fakes = self._forward(self.G_ema or self.G, self.fixed_z, self.fixed_y)
+                    x_fakes = self._forward(self.G, self.fixed_z, self.fixed_y)
+                self.G_ema.swap_state_dict(self.G)
+
                 self.log_images(x_fakes, "generated", step)
 
             log_dict: dict[str, Any] = dict()
@@ -191,8 +186,7 @@ class GANTrainer:
 
             if step % cfg.train_g_interval == 0:
                 log_dict["loss/g"] = self.train_G_step(x_reals, ys, step).item()
-                if self.G_ema is not None:
-                    self.G_ema.update(self.G)
+                self.G_ema.update(self.G)
 
             # loss values are associated with models before the optimizer step
             # therefore, increment `step` after logging
@@ -207,9 +201,6 @@ class GANTrainer:
             if cfg.grow_interval > 0 and step % cfg.grow_interval == 0:
                 self.D.grow()
                 self.G.grow()
-                if self.G_ema is not None:
-                    self.G_ema.ema_model.grow()
-                img_size *= 2
 
             if step >= cfg.n_steps:
                 break
@@ -229,6 +220,11 @@ class GANTrainer:
         with torch.no_grad():
             z_noise = torch.randn(bsize, cfg.z_dim, device=self.accelerator.device)
             x_fakes = self._forward(self.G, z_noise, ys)
+
+        # for progressive growing
+        if x_reals.shape[-2:] != x_fakes.shape[-2:]:
+            x_reals = F.interpolate(x_reals, x_fakes.shape[-2:], mode="bilinear")
+
         d_reals = self._forward(self.D, x_reals, ys)
         d_fakes = self._forward(self.D, x_fakes, ys)
 
@@ -323,29 +319,49 @@ class GANTrainer:
 
 
 # reference: https://github.com/lucidrains/ema-pytorch
-class EMA(nn.Module):
-    def __init__(self, model: nn.Module, ema_decay: float = 0.999, warmup: int = 100, device=None):
-        super().__init__()
-        ema_model = copy.deepcopy(model)
-        if device is not None:
-            ema_model = ema_model.to(device)
-        self.ema_model = ema_model
-        self.ema_decay = ema_decay
-        self.warmup = warmup
-        self.counter = 0
+class EMA:
+    def __init__(
+        self, model: nn.Module, ema_decay: float = 0.999, warmup: int = 100, device=None, enable: bool = False
+    ):
+        # super().__init__()
+        self.enable = enable
+        if enable:
+            self.ema_state_dict = copy.deepcopy(model.state_dict())
+            if device is not None:
+                self.ema_state_dict = {k: v.to(device) for k, v in self.ema_state_dict.items()}
+            self.ema_decay = ema_decay
+            self.warmup = warmup
+            self.counter = 0
 
     @torch.no_grad()
     def update(self, model: nn.Module):
-        self.counter += 1
-        if self.counter < self.warmup:
+        if not self.enable:
             return
 
-        for name, param in model.named_parameters():
-            ema_param = self.ema_model.get_parameter(name)
-            if self.counter > self.warmup:
-                ema_param.lerp_(param, 1 - self.ema_decay)
-            else:
-                ema_param.copy_(param)
+        self.counter += 1
+        if self.counter == self.warmup:
+            for k, v in model.state_dict().items():
+                self.ema_state_dict[k].copy_(v)
 
-    def forward(self, *args, **kwargs):
-        return self.ema_model(*args, **kwargs)
+        elif self.counter > self.warmup:
+            for k, v in model.state_dict().items():
+                self.ema_state_dict[k].lerp_(v, 1 - self.ema_decay)
+
+    @torch.no_grad()
+    def swap_state_dict(self, model: nn.Module):
+        if not self.enable:
+            return
+
+        current_state_dict = copy.deepcopy(model.state_dict())
+        model.load_state_dict(self.ema_state_dict)
+        self.ema_state_dict = current_state_dict
+
+    def state_dict(self):
+        return self.ema_state_dict if self.enable else {}
+
+    def load_state_dict(self, state_dict):
+        if not self.enable:
+            return
+
+        for k, v in state_dict.items():
+            self.ema_state_dict[k].copy_(v)

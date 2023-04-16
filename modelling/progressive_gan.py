@@ -29,7 +29,7 @@ class ProgressiveGANConfig:
     z_dim: int = 512
     min_channels: int = 16
     max_channels: int = 512
-    smallest_map_size: int = 4
+    init_map_size: int = 4
     progressive_growing: bool = False
     grow_interval: int = 50_000
     norm: _Norm = PixelNorm
@@ -52,7 +52,7 @@ class DiscriminatorStage(nn.Module):
                 MinibatchStdDev(),
                 conv3x3(in_channels + 1, in_channels),
                 config.act(),
-                nn.Conv2d(in_channels, out_channels, config.smallest_map_size),
+                nn.Conv2d(in_channels, out_channels, config.init_map_size),
                 config.act(),
                 conv1x1(out_channels, 1),
             )
@@ -86,7 +86,7 @@ class Discriminator(nn.Module):
         assert config.img_size > 4 and math.log2(config.img_size).is_integer()
         super().__init__()
         self.config = config
-        self.total_stages = int(math.log2(config.img_size // config.smallest_map_size)) + 1
+        self.total_stages = int(math.log2(config.img_size // config.init_map_size)) + 1
         self.num_stages = 1 if config.progressive_growing else self.total_stages
         self.grow_counter = 0
 
@@ -119,7 +119,7 @@ class Discriminator(nn.Module):
             # F.interpolate() is 20% faster than F.avg_pool() on RTX 3090
             prev_out = F.interpolate(imgs, scale_factor=0.5, mode="bilinear")
             prev_out = self.from_rgb[-self.num_stages + 1](prev_out)
-            out = torch.lerp(prev_out, out, self.grow_counter / self.config.grow_interval)
+            out = out.lerp(prev_out, self.grow_counter / self.config.grow_interval)
             self.grow_counter -= 1
 
         if self.num_stages > 1:
@@ -137,7 +137,7 @@ class GeneratorStage(nn.Sequential):
         first_stage: bool = False,
     ):
         if first_stage:
-            up_conv = partial(nn.ConvTranspose2d, kernel_size=config.smallest_map_size)
+            up_conv = partial(nn.ConvTranspose2d, kernel_size=config.init_map_size)
         else:
             up_conv = partial(up_conv_blur, kernel_size=3, blur_size=config.blur_size)
         order = ["conv", "act", "norm"]
@@ -154,7 +154,7 @@ class Generator(nn.Module):
         assert config.img_size > 4 and math.log2(config.img_size).is_integer()
         super().__init__()
         self.config = config
-        self.total_stages = int(math.log2(config.img_size // config.smallest_map_size)) + 1
+        self.total_stages = int(math.log2(config.img_size // config.init_map_size)) + 1
         self.num_stages = 1 if config.progressive_growing else self.total_stages
         self.grow_counter = 0
 
@@ -164,7 +164,7 @@ class Generator(nn.Module):
         self.to_rgb = nn.ModuleList()
 
         in_channels = config.z_dim
-        first_out_channels = self.config.min_channels * self.config.img_size // self.config.smallest_map_size
+        first_out_channels = self.config.min_channels * self.config.img_size // self.config.init_map_size
         for i in range(self.total_stages):
             out_channels = min(first_out_channels // 2**i, config.max_channels)
             self.stages.append(GeneratorStage(in_channels, out_channels, config, i == 0))
@@ -192,7 +192,7 @@ class Generator(nn.Module):
         if self.grow_counter > 0:
             prev_out = self.to_rgb[self.num_stages - 2](prev_out)
             prev_out = F.interpolate(prev_out, scale_factor=2, mode="nearest")
-            out = torch.lerp(prev_out, out, self.grow_counter / self.config.grow_interval)
+            out = out.lerp(prev_out, self.grow_counter / self.config.grow_interval)
             self.grow_counter -= 1
 
         return out

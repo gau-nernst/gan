@@ -83,7 +83,7 @@ class Generator(nn.Module):
         super().__init__()
         self.mapping_network = MappingNetwork(config)
 
-        map_size = config.smallest_map_size
+        map_size = config.init_map_size
         in_depth = config.input_depth
         self.learned_input = nn.Parameter(torch.empty(1, in_depth, map_size, map_size))
         self.up_blur = Blur(config.blur_size, up=2)

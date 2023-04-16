@@ -50,7 +50,7 @@ class MappingNetwork(nn.Module):
         self.style_mixing = config.style_mixing
         self.truncation_psi = config.truncation_psi
         self.truncation_cutoff = config.truncation_cutoff
-        self.n_layers = int(math.log2(config.img_size // config.smallest_map_size) + 1) * 2
+        self.n_layers = int(math.log2(config.img_size // config.init_map_size) + 1) * 2
 
     def forward(self, z_embs: Tensor):
         w_embs = self.mlp(z_embs)
@@ -120,7 +120,7 @@ class Generator(nn.Module):
         super().__init__()
         self.mapping_network = MappingNetwork(config)
 
-        map_size = config.smallest_map_size
+        map_size = config.init_map_size
         in_depth = config.input_depth
         self.learned_input = nn.Parameter(torch.empty(1, in_depth, map_size, map_size))
 
