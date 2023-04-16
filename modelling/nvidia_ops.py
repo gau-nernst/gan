@@ -38,7 +38,7 @@ class MinibatchStdDev(nn.Module):
         b, c, h, w = imgs.shape
         std = imgs.view(self.group_size, -1, c, h, w).std(0, unbiased=False)
         std = std.mean([1, 2, 3], keepdim=True)
-        std = std.repeat_interleave(self.group_size, 0).expand(b, 1, h, w)
+        std = std.repeat(self.group_size, 1, 1, 1).expand(b, 1, h, w)
         return torch.cat([imgs, std], dim=1)
 
 
