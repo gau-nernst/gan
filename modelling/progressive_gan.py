@@ -85,8 +85,10 @@ class Discriminator(nn.Module):
         super().__init__()
         self.config = config
         self.total_stages = int(math.log2(config.img_size // config.init_map_size)) + 1
-        self.num_stages = 1 if config.progressive_growing else self.total_stages
-        self.grow_counter = 0
+        self.register_buffer("num_stages", torch.tensor(1 if config.progressive_growing else self.total_stages))
+        self.register_buffer("grow_counter", torch.tensor(0))
+        self.num_stages: Tensor
+        self.grow_counter: Tensor
 
         self.from_rgb = nn.ModuleList()
         self.stages = nn.ModuleList()
@@ -107,7 +109,7 @@ class Discriminator(nn.Module):
         if self.num_stages >= self.total_stages:
             raise RuntimeError("Cannot grow anymore")
         self.num_stages += 1
-        self.grow_counter = self.config.grow_interval
+        self.grow_counter.fill_(self.config.grow_interval)
 
     def forward(self, imgs: Tensor):
         out = self.from_rgb[-self.num_stages](imgs)
@@ -117,7 +119,7 @@ class Discriminator(nn.Module):
             # F.interpolate() is 20% faster than F.avg_pool() on RTX 3090
             prev_out = F.interpolate(imgs, scale_factor=0.5, mode="bilinear")
             prev_out = self.from_rgb[-self.num_stages + 1](prev_out)
-            out = out.lerp(prev_out, self.grow_counter / self.config.grow_interval)
+            out = out.lerp(prev_out, self.grow_counter.to(out.dtype) / self.config.grow_interval)
             self.grow_counter -= 1
 
         if self.num_stages > 1:
@@ -153,8 +155,10 @@ class Generator(nn.Module):
         super().__init__()
         self.config = config
         self.total_stages = int(math.log2(config.img_size // config.init_map_size)) + 1
-        self.num_stages = 1 if config.progressive_growing else self.total_stages
-        self.grow_counter = 0
+        self.register_buffer("num_stages", torch.tensor(1 if config.progressive_growing else self.total_stages))
+        self.register_buffer("grow_counter", torch.tensor(0))
+        self.num_stages: Tensor
+        self.grow_counter: Tensor
 
         self.input_norm = config.norm(config.z_dim)
 
@@ -178,7 +182,7 @@ class Generator(nn.Module):
         if self.num_stages >= self.total_stages:
             raise RuntimeError("Cannot grow anymore")
         self.num_stages += 1
-        self.grow_counter = self.config.grow_interval
+        self.grow_counter.fill_(self.config.grow_interval)
 
     def forward(self, z_embs: Tensor):
         out = self.input_norm(z_embs[..., None, None])
@@ -190,7 +194,7 @@ class Generator(nn.Module):
         if self.grow_counter > 0:
             prev_out = self.to_rgb[self.num_stages - 2](prev_out)
             prev_out = F.interpolate(prev_out, scale_factor=2, mode="nearest")
-            out = out.lerp(prev_out, self.grow_counter / self.config.grow_interval)
+            out = out.lerp(prev_out, self.grow_counter.to(out.dtype) / self.config.grow_interval)
             self.grow_counter -= 1
 
         return out

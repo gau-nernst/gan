@@ -69,6 +69,7 @@ class GANTrainerConfig:
     n_steps: int = 10_000
     ema: bool = False
     ema_decay: float = 0.999
+    ema_device: Optional[str] = None
     checkpoint_interval: int = 10_000
     checkpoint_path: str = "checkpoints"
     resume_from_checkpoint: Optional[str] = None
@@ -98,6 +99,7 @@ class GANTrainer:
             kwargs_handlers=[DistributedDataParallelKwargs(find_unused_parameters=config.find_unused_parameters)],
         )
         rank_zero = accelerator.is_main_process
+        config.ema_device = config.ema_device or str(accelerator.device)
 
         if config.spectral_norm_d:
             apply_spectral_normalization(D)
@@ -321,17 +323,23 @@ class GANTrainer:
 # reference: https://github.com/lucidrains/ema-pytorch
 class EMA:
     def __init__(
-        self, model: nn.Module, ema_decay: float = 0.999, warmup: int = 100, device=None, enable: bool = False
+        self,
+        model: nn.Module,
+        ema_decay: float = 0.999,
+        warmup: int = 100,
+        device: Optional[torch.device] = None,
+        enable: bool = False,
     ):
-        # super().__init__()
+        super().__init__()
         self.enable = enable
+        self.ema_state_dict = {}
         if enable:
-            self.ema_state_dict = copy.deepcopy(model.state_dict())
-            if device is not None:
-                self.ema_state_dict = {k: v.to(device) for k, v in self.ema_state_dict.items()}
             self.ema_decay = ema_decay
             self.warmup = warmup
             self.counter = 0
+            for k, v in model.state_dict().items():
+                self.ema_state_dict[k] = v.new_empty(v.shape, device=device)
+                self.ema_state_dict[k].copy_(v)
 
     @torch.no_grad()
     def update(self, model: nn.Module):
@@ -339,29 +347,31 @@ class EMA:
             return
 
         self.counter += 1
-        if self.counter == self.warmup:
-            for k, v in model.state_dict().items():
-                self.ema_state_dict[k].copy_(v)
+        if self.counter < self.warmup:
+            return
 
-        elif self.counter > self.warmup:
-            for k, v in model.state_dict().items():
-                self.ema_state_dict[k].lerp_(v, 1 - self.ema_decay)
+        for k, v in model.state_dict().items():
+            ema_v = self.ema_state_dict[k]
+            if self.counter == self.warmup or not v.is_floating_point():
+                ema_v.copy_(v)
+            else:
+                ema_v.lerp_(v, 1 - self.ema_decay)
 
-    @torch.no_grad()
     def swap_state_dict(self, model: nn.Module):
         if not self.enable:
             return
 
-        current_state_dict = copy.deepcopy(model.state_dict())
-        model.load_state_dict(self.ema_state_dict)
-        self.ema_state_dict = current_state_dict
+        for k, v in model.state_dict().items():
+            tmp = v.clone()
+            v.copy_(self.ema_state_dict[k])
+            self.ema_state_dict[k].copy_(tmp)
 
     def state_dict(self):
-        return self.ema_state_dict if self.enable else {}
+        return {"counter": self.counter, **self.ema_state_dict}
 
     def load_state_dict(self, state_dict):
-        if not self.enable:
-            return
-
         for k, v in state_dict.items():
-            self.ema_state_dict[k].copy_(v)
+            if k == "counter":
+                self.counter = v
+            else:
+                self.ema_state_dict[k] = v
