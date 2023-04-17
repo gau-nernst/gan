@@ -1,3 +1,4 @@
+import contextlib
 import copy
 import datetime
 from dataclasses import dataclass, field
@@ -173,11 +174,8 @@ class GANTrainer:
         )
         for x_reals, ys in pbar:
             if step % cfg.log_img_interval == 0 and self.accelerator.is_main_process:
-                self.G_ema.swap_state_dict(self.G)
-                with torch.inference_mode():
+                with torch.inference_mode(), self.G_ema.swap_state_dict(self.G):
                     x_fakes = self._forward(self.G, self.fixed_z, self.fixed_y)
-                self.G_ema.swap_state_dict(self.G)
-
                 self.log_images(x_fakes, "generated", step)
 
             log_dict: dict[str, Any] = dict()
@@ -213,16 +211,16 @@ class GANTrainer:
         bsize = x_reals.shape[0]
         cfg = self.config
 
-        if cfg.r1_penalty > 0 and step % cfg.r1_penalty_interval == 0:
-            x_reals.requires_grad_()
-
         with torch.no_grad():
             z_noise = torch.randn(bsize, cfg.z_dim, device=self.accelerator.device)
             x_fakes = self._forward(self.G, z_noise, ys)
 
         # for progressive growing
         if x_reals.shape[-2:] != x_fakes.shape[-2:]:
-            x_reals = F.interpolate(x_reals, x_fakes.shape[-2:], mode="bilinear")
+            x_reals = F.interpolate(x_reals, x_fakes.shape[-2:], mode="bilinear", antialias=True)
+
+        if cfg.r1_penalty > 0 and step % cfg.r1_penalty_interval == 0:
+            x_reals.requires_grad_()
 
         d_reals = self._forward(self.D, x_reals, ys)
         d_fakes = self._forward(self.D, x_fakes, ys)
@@ -267,10 +265,9 @@ class GANTrainer:
         # Algorithm 1 in paper clip weights after optimizer step, but GitHub code clip before optimizer step
         # it shouldn't matter much in practice
         if cfg.method == "wgan":
-            clip = cfg.wgan_clip
             with torch.no_grad():
                 for param in self.D.parameters():
-                    param.clip_(-clip, clip)
+                    param.clip_(-cfg.wgan_clip, cfg.wgan_clip)
 
         return loss_d
 
@@ -354,14 +351,22 @@ class EMA:
             else:
                 ema_v.lerp_(v, 1 - self.ema_decay)
 
+    @staticmethod
+    def _swap_state_dict(state_dict_a, state_dict_b):
+        for k, v in state_dict_b.items():
+            tmp = v.clone()
+            v.copy_(state_dict_a[k])
+            state_dict_a[k].copy_(tmp)
+
+    @contextlib.contextmanager
     def swap_state_dict(self, model: nn.Module):
         if not self.enable:
+            yield
             return
 
-        for k, v in model.state_dict().items():
-            tmp = v.clone()
-            v.copy_(self.ema_state_dict[k])
-            self.ema_state_dict[k].copy_(tmp)
+        self._swap_state_dict(self.ema_state_dict, model.state_dict())
+        yield
+        self._swap_state_dict(self.ema_state_dict, model.state_dict())
 
     def state_dict(self):
         return {"counter": self.counter, **self.ema_state_dict}
