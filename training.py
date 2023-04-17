@@ -216,8 +216,9 @@ class GANTrainer:
             x_fakes = self._forward(self.G, z_noise, ys)
 
         # for progressive growing
+        # F.avg_pool2d() is significantly faster than F.interpolate(mode="bilinear", antialias=True)
         if x_reals.shape[-2:] != x_fakes.shape[-2:]:
-            x_reals = F.interpolate(x_reals, x_fakes.shape[-2:], mode="bilinear", antialias=True)
+            x_reals = F.adaptive_avg_pool2d(x_reals, x_fakes.shape[-2:])
 
         if cfg.r1_penalty > 0 and step % cfg.r1_penalty_interval == 0:
             x_reals.requires_grad_()
@@ -240,7 +241,7 @@ class GANTrainer:
 
                 (d_grad,) = torch.autograd.grad(d_inters.sum(), x_inters, create_graph=True)
                 d_grad_norm = torch.linalg.vector_norm(d_grad, dim=(1, 2, 3))
-                loss_d = loss_d + cfg.wgan_gp_lamb * ((d_grad_norm - 1) ** 2).mean()
+                loss_d = loss_d + cfg.wgan_gp_lamb * (d_grad_norm - 1).square().mean()
 
         elif cfg.method == "hinge":
             loss_d = F.relu(1 - d_reals).mean() + F.relu(1 + d_fakes).mean()

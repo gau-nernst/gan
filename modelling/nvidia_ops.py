@@ -21,11 +21,11 @@ from .base import conv1x1
 class PixelNorm(nn.Module):
     def __init__(self, in_dim: int, eps: float = 1e-8):
         super().__init__()
-        self.scale = in_dim**0.5
         self.eps = eps
 
     def forward(self, x: Tensor) -> Tensor:
-        return F.normalize(x, eps=self.eps) * self.scale
+        x = x.float()  # always compute in fp32
+        return x * x.square().mean(1, keepdim=True).add(self.eps).rsqrt()
 
 
 # introduced in Progressive GAN
@@ -35,6 +35,7 @@ class MinibatchStdDev(nn.Module):
         self.group_size = group_size
 
     def forward(self, imgs: Tensor):
+        imgs = imgs.float()  # always compute in fp32
         b, c, h, w = imgs.shape
         std = imgs.view(self.group_size, -1, c, h, w).std(0, unbiased=False)
         std = std.mean([1, 2, 3], keepdim=True)
@@ -68,10 +69,12 @@ def upfirdn2d(imgs: Tensor, kernel: Tensor, up: int, down: int, px1: int, px2: i
         imgs = _imgs
 
     if px1 == px2 and py1 == py2:
-        return F.conv2d(imgs, kernel, stride=down, padding=(py1, px1), groups=c)
+        out = F.conv2d(imgs, kernel, stride=down, padding=(py1, px1), groups=c)
     else:
         imgs = F.pad(imgs, (px1, px2, py1, py2))
-        return F.conv2d(imgs, kernel, stride=down, groups=c)
+        out = F.conv2d(imgs, kernel, stride=down, groups=c)
+
+    return out
 
 
 # significant speed-up for higher order gradients
