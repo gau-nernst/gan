@@ -16,7 +16,12 @@ Features:
     - Not implemented (yet): path length regularization
   - Conditional GAN (modified for CNN)
   - SA-GAN
-  - BigGAN (TODO)
+
+TODO:
+
+- AC-GAN
+- BigGAN
+- Pix2Pix / CycleGAN
 
 Goodies:
 

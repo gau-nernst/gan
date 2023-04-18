@@ -14,9 +14,6 @@ from tqdm import tqdm
 
 
 def cuda_speed_up():
-    import torch.backends.cuda
-    import torch.backends.cudnn
-
     torch.backends.cuda.matmul.allow_tf32 = True
     torch.backends.cudnn.allow_tf32 = True
     torch.backends.cudnn.benchmark = True
@@ -135,6 +132,7 @@ class GANTrainer:
         self.optim_g = optim_g
         self.fixed_z = fixed_z.to(accelerator.device)
         self.fixed_y = fixed_y.to(accelerator.device)
+        self.counter = 0
 
     @staticmethod
     def build_optimizers(config: GANTrainerConfig, D: nn.Module, G: nn.Module):
@@ -160,10 +158,12 @@ class GANTrainer:
 
         return optim_d, optim_g
 
+    def _forward(self, m: nn.Module, xs: Tensor, ys: Optional[Tensor]) -> Tensor:
+        return m(xs, ys) if self.config.conditional else m(xs)
+
     def train(self, dloader: DataLoader):
         cfg = self.config
         dloader = self.accelerator.prepare(dloader)
-        step = 0
 
         pbar = tqdm(
             cycle(dloader),
@@ -172,42 +172,40 @@ class GANTrainer:
             dynamic_ncols=True,
             disable=not self.accelerator.is_main_process,
         )
+
         for x_reals, ys in pbar:
-            if step % cfg.log_img_interval == 0 and self.accelerator.is_main_process:
+            if self.counter % cfg.log_img_interval == 0 and self.accelerator.is_main_process:
                 with torch.inference_mode(), self.G_ema.swap_state_dict(self.G):
                     x_fakes = self._forward(self.G, self.fixed_z, self.fixed_y)
-                self.log_images(x_fakes, "generated", step)
+                self.log_images(x_fakes, "generated", self.counter)
 
             log_dict: dict[str, Any] = dict()
-            log_dict["loss/d"] = self.train_D_step(x_reals, ys, step).item()
+            log_dict["loss/d"] = self.train_D_step(x_reals, ys, self.counter).item()
 
-            if step % cfg.train_g_interval == 0:
-                log_dict["loss/g"] = self.train_G_step(x_reals, ys, step).item()
+            if self.counter % cfg.train_g_interval == 0:
+                log_dict["loss/g"] = self.train_G_step(x_reals, ys, self.counter).item()
                 self.G_ema.update(self.G)
 
             # loss values are associated with models before the optimizer step
             # therefore, increment `step` after logging
-            if step % cfg.log_interval == 0:
-                self.accelerator.log(log_dict, step=step)
+            if self.counter % cfg.log_interval == 0:
+                self.accelerator.log(log_dict, step=self.counter)
 
-            step += 1
+            self.counter += 1
 
-            if step % cfg.checkpoint_interval == 0:
-                self.accelerator.save_state(f"{cfg.checkpoint_path}/step_{step:07d}")
+            if self.counter % cfg.checkpoint_interval == 0:
+                self.accelerator.save_state(f"{cfg.checkpoint_path}/step_{self.counter:07d}")
 
             for m in (self.D, self.G):
                 if hasattr(m, "step"):
                     m.step()
 
-            if step >= cfg.n_steps:
+            if self.counter >= self.config.n_steps:
                 break
 
-        self.accelerator.end_training()
+        # self.accelerator.end_training()
 
-    def _forward(self, m: nn.Module, xs: Tensor, ys: Optional[Tensor]) -> Tensor:
-        return m(xs, ys) if self.config.conditional else m(xs)
-
-    def train_D_step(self, x_reals: Tensor, ys: Tensor, step: int):
+    def train_D_step(self, x_reals: Tensor, ys: Optional[Tensor]):
         bsize = x_reals.shape[0]
         cfg = self.config
 
@@ -217,10 +215,10 @@ class GANTrainer:
 
         # for progressive growing
         # F.avg_pool2d() is significantly faster than F.interpolate(mode="bilinear", antialias=True)
-        if x_reals.shape[-2:] != x_fakes.shape[-2:]:
-            x_reals = F.adaptive_avg_pool2d(x_reals, x_fakes.shape[-2:])
+        # if x_reals.shape[-2:] != x_fakes.shape[-2:]:
+        #     x_reals = F.adaptive_avg_pool2d(x_reals, x_fakes.shape[-2:])
 
-        if cfg.r1_penalty > 0 and step % cfg.r1_penalty_interval == 0:
+        if cfg.r1_penalty > 0 and self.counter % cfg.r1_penalty_interval == 0:
             x_reals.requires_grad_()
 
         d_reals = self._forward(self.D, x_reals, ys)
@@ -254,7 +252,7 @@ class GANTrainer:
             loss_d = loss_d + d_reals.square().mean() * cfg.drift_penalty
 
         # https://arxiv.org/abs/1801.04406, for StyleGAN and StyleGAN2
-        if cfg.r1_penalty > 0 and step % cfg.r1_penalty_interval == 0:
+        if cfg.r1_penalty > 0 and self.counter % cfg.r1_penalty_interval == 0:
             (d_grad,) = torch.autograd.grad(d_reals.sum(), x_reals, create_graph=True)
             d_grad_norm2 = d_grad.square().sum() / bsize
             loss_d = loss_d + d_grad_norm2 * cfg.r1_penalty / 2
@@ -272,7 +270,7 @@ class GANTrainer:
 
         return loss_d
 
-    def train_G_step(self, x_reals: Tensor, ys: Tensor, step: int):
+    def train_G_step(self, x_reals: Tensor, ys: Optional[Tensor]):
         bsize = x_reals.shape[0]
         cfg = self.config
         self.D.requires_grad_(False)

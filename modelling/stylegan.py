@@ -64,9 +64,9 @@ class MappingNetwork(nn.Module):
                 w_embs2 = self.mlp(torch.randn_like(z_embs))
                 w_embs2 = w_embs2.unsqueeze(1).expand(-1, self.n_layers, -1)
 
-                cutfoff = torch.arange(self.n_layers) < torch.randint(1, self.n_layers, (self.n_layers,))
-                cutfoff = cutfoff.view(1, self.n_layers, 1).to(w_embs.device)
-                w_embs = torch.where(cutfoff, w_embs, w_embs2)
+                cutoff = torch.arange(self.n_layers) < torch.randint(1, self.n_layers, (self.n_layers,))
+                cutoff = cutoff.view(1, self.n_layers, 1).to(w_embs.device)
+                w_embs = w_embs.where(cutoff, w_embs2)
 
         else:
             w_embs = w_embs.unsqueeze(1).expand(-1, self.n_layers, -1)
@@ -75,7 +75,7 @@ class MappingNetwork(nn.Module):
             w_embs_trunc = self.w_mean.lerp(w_embs, self.truncation_psi)
             cutoff = torch.arange(self.n_layers) < self.truncation_cutoff
             cutoff = cutoff.view(1, self.n_layers, 1).to(w_embs.device)
-            w_embs = torch.where(cutoff, w_embs_trunc, w_embs)
+            w_embs = w_embs_trunc.where(cutoff, w_embs)
 
         return w_embs
 
@@ -147,7 +147,7 @@ class Generator(nn.Module):
 
     def reset_parameters(self):
         nn.init.ones_(self.learned_input)
-        self.layers.apply(init_weights)
+        self.apply(init_weights)
 
     def grow(self):
         raise NotImplementedError

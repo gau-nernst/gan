@@ -50,5 +50,7 @@ def get_parser():
     parser.add_argument("--num_workers", type=int, default=8)
     parser.add_argument("--img_size", type=int, default=64)
     parser.add_argument("--n_log_imgs", type=int, default=40)
+    parser.add_argument("--progressive_growing", action="store_true")
+    parser.add_argument("--fade_duration", type=int)
     add_args_from_cls(parser, GANTrainerConfig)
     return parser

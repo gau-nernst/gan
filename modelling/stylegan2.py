@@ -113,7 +113,7 @@ class Generator(nn.Module):
 
     def reset_parameters(self):
         nn.init.ones_(self.learned_input)
-        self.stages.apply(init_weights)
+        self.apply(init_weights)
 
     def forward(self, z_embs: Tensor):
         w_embs = self.mapping_network(z_embs)
