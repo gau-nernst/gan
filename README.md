@@ -7,6 +7,7 @@ Features:
   - WGAN and WGAN-GP
   - SN-GAN
   - Hinge loss
+  - LSGAN
 - Architectures
   - DCGAN
   - NVIDIA GANs:

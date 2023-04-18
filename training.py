@@ -239,6 +239,9 @@ class GANTrainer:
         elif cfg.method == "hinge":
             loss_d = F.relu(1 - d_reals).mean() + F.relu(1 + d_fakes).mean()
 
+        elif cfg.method == "lsgan":
+            loss_d = (d_reals - 1).square().mean() + d_fakes.square().mean()
+
         else:
             raise ValueError(f"Unsupported method {cfg.method}")
 
@@ -279,6 +282,9 @@ class GANTrainer:
 
         elif cfg.method in ("wgan", "wgan-gp", "hinge"):
             loss_g = -d_fakes.mean()
+
+        elif cfg.method == "lsgan":
+            loss_g = (d_fakes - 1).square().mean()
 
         else:
             raise ValueError(f"Unsupported method {cfg.method}")
