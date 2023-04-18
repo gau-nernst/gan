@@ -10,7 +10,7 @@ from functools import partial
 
 from torch import Tensor, nn
 
-from .base import _Act, _Norm, conv_norm_act
+from .base import _Act, _Norm, conv_norm_act, leaky_relu, relu
 
 
 class Discriminator(nn.Module):
@@ -21,13 +21,13 @@ class Discriminator(nn.Module):
         init_map_size: int = 4,
         min_channels: int = 64,
         norm: _Norm = partial(nn.BatchNorm2d, track_running_stats=False),
-        act: _Act = partial(nn.LeakyReLU, 0.2, True),
+        act: _Act = leaky_relu,
     ):
         super().__init__()
         self.layers = nn.Sequential()
 
         # add strided conv until image size = 4
-        conv = partial(nn.Conv2d, kernel_size=4, stride=2, padding=1, bias=False)
+        conv = partial(nn.Conv2d, kernel_size=4, stride=2, padding=1)
         while img_size > init_map_size:
             self.layers.append(conv_norm_act(img_channels, min_channels, conv, norm, act))
             img_channels = min_channels
@@ -55,7 +55,7 @@ class Generator(nn.Module):
         init_map_size: int = 4,
         min_channels: int = 64,
         norm: _Norm = partial(nn.BatchNorm2d, track_running_stats=False),
-        act: _Act = partial(nn.ReLU, True),
+        act: _Act = relu,
     ):
         super().__init__()
         self.layers = nn.Sequential()
