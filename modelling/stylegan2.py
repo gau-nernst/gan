@@ -10,12 +10,15 @@ from dataclasses import dataclass, replace
 from typing import Optional
 
 import torch
+import torch.nn.functional as F
 from torch import Tensor, nn
 
-from .base import batched_conv2d
 from .nvidia_ops import Blur
 from .progressive_gan import Discriminator, init_weights
 from .stylegan import MappingNetwork, StyleGANConfig
+
+
+batched_conv2d = torch.vmap(F.conv2d)
 
 
 @dataclass

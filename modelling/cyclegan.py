@@ -3,7 +3,11 @@ from functools import partial
 
 from torch import Tensor, nn
 
-from .base import _Act, _Norm, conv3x3, conv7x7, upconv3x3
+from .base import _Act, _Norm, conv3x3
+
+
+conv7x7 = partial(nn.Conv2d, kernel_size=7, padding=3)
+upconv3x3 = partial(nn.ConvTranspose2d, kernel_size=3, stride=2, padding=1, output_padding=1)
 
 
 @dataclass
@@ -46,13 +50,12 @@ class ResNetGenerator(nn.Sequential):
 
         self.down_blocks = nn.Sequential()
         for _ in range(config.downsample):
-            self.down_blocks.extend(
-                [
-                    conv3x3(channels, channels * 2, bias=False),
-                    config.norm(channels * 2),
-                    config.act(),
-                ]
-            )
+            block = [
+                conv3x3(channels, channels * 2, bias=False),
+                config.norm(channels * 2),
+                config.act(),
+            ]
+            self.down_blocks.extend(block)
             channels *= 2
 
         self.resnet_blocks = nn.Sequential()
@@ -61,13 +64,12 @@ class ResNetGenerator(nn.Sequential):
 
         self.up_blocks = nn.Sequential()
         for _ in range(config.downsample):
-            self.up_blocks.extend(
-                [
-                    upconv3x3(channels, channels // 2, bias=False),
-                    config.norm(channels // 2),
-                    config.act(),
-                ]
-            )
+            block = [
+                upconv3x3(channels, channels // 2, bias=False),
+                config.norm(channels // 2),
+                config.act(),
+            ]
+            self.up_blocks.extend(block)
             channels //= 2
 
         self.output_block = nn.Sequential(
