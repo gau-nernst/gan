@@ -3,6 +3,7 @@ from functools import partial
 from torch import Tensor, nn
 
 from .base import _Act, _Norm, conv3x3, conv_norm_act
+from .dcgan import init_weights
 
 
 conv7x7 = partial(nn.Conv2d, kernel_size=7, padding=3)
@@ -28,7 +29,7 @@ class ResNetGenerator(nn.Sequential):
         in_channels: int = 3,
         out_channels: int = 3,
         base_channels: int = 64,
-        n_blocks: int = 4,
+        n_blocks: int = 9,
         downsample: int = 2,
         norm: _Norm = nn.InstanceNorm2d,
         act: _Act = partial(nn.ReLU, inplace=True),
@@ -47,7 +48,12 @@ class ResNetGenerator(nn.Sequential):
 
         self.up_blocks = nn.Sequential()
         for _ in range(downsample):
-            self.up_blocks.extend(conv_norm_act(base_channels, base_channels // 2, upconv3x3, norm, act))
+            self.up_blocks.append(conv_norm_act(base_channels, base_channels // 2, upconv3x3, norm, act))
             base_channels //= 2
 
         self.output_block = nn.Sequential(conv7x7(base_channels, out_channels), nn.Tanh())
+
+        self.reset_parameters()
+    
+    def reset_parameters(self):
+        self.apply(init_weights)
