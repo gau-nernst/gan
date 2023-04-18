@@ -6,12 +6,11 @@
 # https://github.com/soumith/dcgan.torch/
 # https://github.com/martinarjovsky/WassersteinGAN/
 
-import math
 from functools import partial
 
 from torch import Tensor, nn
 
-from .base import _Act, _Norm, conv_norm_act
+from .base import _Act, _Norm
 
 
 class Discriminator(nn.Module):
@@ -24,24 +23,19 @@ class Discriminator(nn.Module):
         norm: _Norm = partial(nn.BatchNorm2d, track_running_stats=False),
         act: _Act = partial(nn.LeakyReLU, 0.2, True),
     ):
-        assert img_size >= 4 and math.log2(img_size).is_integer()
-        assert math.log2(init_map_size).is_integer()
         super().__init__()
-        conv = partial(nn.Conv2d, kernel_size=4, stride=2, padding=1, bias=False)
-        _conv_norm_act = partial(conv_norm_act, conv=conv, norm=norm, act=act)
-
         self.layers = nn.Sequential()
-        self.layers.append(_conv_norm_act(img_channels, min_channels))
-        img_size //= 2
 
         # add strided conv until image size = 4
+        conv = partial(nn.Conv2d, kernel_size=4, stride=2, padding=1, bias=False)
         while img_size > init_map_size:
-            self.layers.append(_conv_norm_act(min_channels, min_channels * 2))
+            self.layers.extend([conv(img_channels, min_channels), norm(min_channels), act()])
+            img_channels = min_channels
             min_channels *= 2
             img_size //= 2
 
         # flatten and matmul
-        self.layers.append(nn.Conv2d(min_channels, 1, init_map_size))
+        self.layers.append(nn.Conv2d(img_channels, 1, init_map_size))
 
         self.reset_parameters()
 
@@ -63,30 +57,23 @@ class Generator(nn.Module):
         norm: _Norm = partial(nn.BatchNorm2d, track_running_stats=False),
         act: _Act = partial(nn.ReLU, True),
     ):
-        assert img_size >= 4 and math.log2(img_size).is_integer()
-        assert math.log2(init_map_size).is_integer()
         super().__init__()
-        conv = partial(nn.ConvTranspose2d, kernel_size=4, stride=2, padding=1, bias=False)
-        _conv_norm_act = partial(conv_norm_act, conv=conv, norm=norm, act=act)
-        channels = min_channels * img_size // 2 // init_map_size
-
         self.layers = nn.Sequential()
 
         # matmul and reshape to 4x4
-        first_layer = _conv_norm_act(z_dim, channels, conv=partial(nn.ConvTranspose2d, kernel_size=init_map_size))
-        self.layers.append(first_layer)
+        channels = min_channels * img_size // 2 // init_map_size
+        first_conv = partial(nn.ConvTranspose2d, kernel_size=init_map_size, bias=False)
+        self.layers.extend([first_conv(z_dim, channels), norm(channels), act()])
 
         # conv transpose until reaching image size / 2
+        conv = partial(nn.ConvTranspose2d, kernel_size=4, stride=2, padding=1, bias=False)
         while init_map_size < img_size // 2:
-            self.layers.append(_conv_norm_act(channels, channels // 2))
+            self.layers.extend([conv(channels, channels // 2), norm(channels // 2), act()])
             channels //= 2
             init_map_size *= 2
 
         # last layer use tanh activation
-        self.layers.append(
-            nn.ConvTranspose2d(channels, img_channels, 4, 2, 1)
-        )  # TODO: check if the last layer has bias
-        self.layers.append(nn.Tanh())
+        self.layers.extend([conv(channels, img_channels, bias=True), nn.Tanh()])
 
         self.reset_parameters()
 
