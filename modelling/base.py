@@ -10,8 +10,12 @@ _Conv = Callable[..., nn.Module]
 _Norm = Callable[[int], nn.Module]
 _Act = Callable[[], nn.Module]
 
-conv3x3 = partial(nn.Conv2d, kernel_size=3, padding=1)
 conv1x1 = partial(nn.Conv2d, kernel_size=1)
+conv3x3 = partial(nn.Conv2d, kernel_size=3, padding=1)
+conv7x7 = partial(nn.Conv2d, kernel_size=7, padding=3)
+
+upconv3x3 = partial(nn.ConvTranspose2d, kernel_size=3, stride=2, padding=1, output_padding=1)
+upconv4x4 = partial(nn.ConvTranspose2d, kernel_size=4, stride=2, padding=1)
 
 batched_conv2d = torch.vmap(F.conv2d)
 
