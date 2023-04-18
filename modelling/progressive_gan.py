@@ -16,7 +16,7 @@ import torch.nn.functional as F
 from torch import Tensor, nn
 from torch.nn.utils import parametrize
 
-from .base import _Act, _Norm, conv1x1, conv3x3, conv_norm_act
+from .base import _Act, _Norm, conv1x1, conv3x3
 from .nvidia_ops import EqualizedLR, MinibatchStdDev, PixelNorm, blur_conv_down, up_conv_blur
 
 
@@ -40,7 +40,6 @@ class BaseProgressiveGAN(nn.Module):
     def __init__(self, config: Optional[ProgressiveGANConfig] = None, **kwargs):
         config = config or ProgressiveGANConfig()
         config = replace(config, **kwargs)
-        assert config.img_size > 4 and math.log2(config.img_size).is_integer()
         super().__init__()
         self.config = config
         self.total_stages = int(math.log2(config.img_size // config.init_map_size)) + 1
@@ -64,36 +63,17 @@ class BaseProgressiveGAN(nn.Module):
 
 
 class DiscriminatorStage(nn.Module):
-    def __init__(
-        self,
-        in_channels: int,
-        out_channels: int,
-        config: ProgressiveGANConfig,
-        last_stage: bool = False,
-    ):
+    def __init__(self, in_channels: int, out_channels: int, config: ProgressiveGANConfig):
         super().__init__()
-        if last_stage:
-            self.main = nn.Sequential(
-                MinibatchStdDev(),
-                conv3x3(in_channels + 1, in_channels),
-                config.act(),
-                nn.Conv2d(in_channels, out_channels, config.init_map_size),
-                config.act(),
-                conv1x1(out_channels, 1),
-            )
-        else:
-            self.main = nn.Sequential(
-                conv3x3(in_channels, in_channels),
-                config.act(),
-                blur_conv_down(in_channels, out_channels, 3, config.blur_size),
-                config.act(),
-            )
+        self.main = nn.Sequential(
+            conv3x3(in_channels, in_channels),
+            config.act(),
+            blur_conv_down(in_channels, out_channels, 3, config.blur_size),
+            config.act(),
+        )
 
         # skip-connection in StyleGAN2
-        if config.residual_D and not last_stage:
-            self.shortcut = blur_conv_down(in_channels, out_channels, 1, config.blur_size)
-        else:
-            self.shortcut = None
+        self.shortcut = blur_conv_down(in_channels, out_channels, 1, config.blur_size) if config.residual_D else None
 
     def forward(self, imgs: Tensor):
         out = self.main(imgs)
@@ -112,11 +92,25 @@ class Discriminator(BaseProgressiveGAN):
         self.stages = nn.ModuleList()
 
         in_channels = config.min_channels
-        for i in range(self.total_stages):
-            out_channels = min(config.min_channels * 2 ** (i + 1), config.max_channels)
+        for i in range(self.total_stages - 1):
             self.from_rgb.append(nn.Sequential(conv1x1(config.img_channels, in_channels), config.act()))
-            self.stages.append(DiscriminatorStage(in_channels, out_channels, config, i == self.total_stages - 1))
+
+            out_channels = min(config.min_channels * 2 ** (i + 1), config.max_channels)
+            self.stages.append(DiscriminatorStage(in_channels, out_channels, config))
             in_channels = out_channels
+
+        self.from_rgb.append(nn.Sequential(conv1x1(config.img_channels, in_channels), config.act()))
+
+        out_channels = min(config.min_channels * 2**self.total_stages, config.max_channels)
+        last_stage = nn.Sequential(
+            MinibatchStdDev(),
+            conv3x3(in_channels + 1, in_channels),
+            config.act(),
+            nn.Conv2d(in_channels, out_channels, config.init_map_size),
+            config.act(),
+            conv1x1(out_channels, 1),
+        )
+        self.stages.append(last_stage)
 
         self.reset_parameters()
 
@@ -137,25 +131,6 @@ class Discriminator(BaseProgressiveGAN):
         return out.view(-1)
 
 
-class GeneratorStage(nn.Sequential):
-    def __init__(
-        self,
-        in_channels: int,
-        out_channels: int,
-        config: ProgressiveGANConfig,
-        first_stage: bool = False,
-    ):
-        if first_stage:
-            up_conv = partial(nn.ConvTranspose2d, kernel_size=config.init_map_size)
-        else:
-            up_conv = partial(up_conv_blur, kernel_size=3, blur_size=config.blur_size)
-        order = ["conv", "act", "norm"]
-        super().__init__(
-            conv_norm_act(in_channels, out_channels, order, up_conv, config.norm, config.act),
-            conv_norm_act(out_channels, out_channels, order, conv3x3, config.norm, config.act),
-        )
-
-
 class Generator(BaseProgressiveGAN):
     def __init__(self, config: Optional[ProgressiveGANConfig] = None, **kwargs):
         super().__init__(config, **kwargs)
@@ -168,11 +143,25 @@ class Generator(BaseProgressiveGAN):
         first_out_channels = self.config.min_channels * self.config.img_size // self.config.init_map_size
         for i in range(self.total_stages):
             out_channels = min(first_out_channels // 2**i, config.max_channels)
-            self.stages.append(GeneratorStage(in_channels, out_channels, config, i == 0))
+            self.stages.append(self.build_stage(in_channels, out_channels, i == 0))
             self.to_rgb.append(conv1x1(out_channels, config.img_channels))
             in_channels = out_channels
 
         self.reset_parameters()
+
+    def build_stage(self, in_channels: int, out_channels: int, first_stage: bool = False) -> nn.Sequential:
+        if first_stage:
+            first_layer = nn.ConvTranspose2d(in_channels, out_channels, self.config.init_map_size)
+        else:
+            first_layer = up_conv_blur(in_channels, out_channels, 3, self.config.blur_size)
+        return nn.Sequential(
+            first_layer,
+            self.config.norm(out_channels),
+            self.config.act(),
+            conv3x3(out_channels, out_channels),
+            self.config.norm(out_channels),
+            self.config.act(),
+        )
 
     def forward(self, z_embs: Tensor):
         curr_stage = self.current_stage.item()
