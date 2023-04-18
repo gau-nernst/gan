@@ -156,11 +156,11 @@ class Generator(BaseProgressiveGAN):
             first_layer = up_conv_blur(in_channels, out_channels, 3, self.config.blur_size)
         return nn.Sequential(
             first_layer,
-            self.config.norm(out_channels),
             self.config.act(),
+            self.config.norm(out_channels),
             conv3x3(out_channels, out_channels),
-            self.config.norm(out_channels),
             self.config.act(),
+            self.config.norm(out_channels),
         )
 
     def forward(self, z_embs: Tensor):
