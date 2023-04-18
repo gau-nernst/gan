@@ -63,7 +63,6 @@ class GANTrainerConfig:
     weight_decay: float = 0
     beta1: float = 0.5
     beta2: float = 0.999
-    n_steps: int = 10_000
     ema: bool = False
     ema_decay: float = 0.999
     ema_device: Optional[str] = None
@@ -161,13 +160,15 @@ class GANTrainer:
     def _forward(self, m: nn.Module, xs: Tensor, ys: Optional[Tensor]) -> Tensor:
         return m(xs, ys) if self.config.conditional else m(xs)
 
-    def train(self, dloader: DataLoader):
+    def train(self, dloader: DataLoader, n_steps: int):
         cfg = self.config
         dloader = self.accelerator.prepare(dloader)
 
+        total_steps = self.counter + n_steps
         pbar = tqdm(
             cycle(dloader),
-            total=cfg.n_steps,
+            total=total_steps,
+            initial=self.counter,
             leave=False,
             dynamic_ncols=True,
             disable=not self.accelerator.is_main_process,
@@ -177,13 +178,13 @@ class GANTrainer:
             if self.counter % cfg.log_img_interval == 0 and self.accelerator.is_main_process:
                 with torch.inference_mode(), self.G_ema.swap_state_dict(self.G):
                     x_fakes = self._forward(self.G, self.fixed_z, self.fixed_y)
-                self.log_images(x_fakes, "generated", self.counter)
+                self.log_images(x_fakes, "generated")
 
             log_dict: dict[str, Any] = dict()
-            log_dict["loss/d"] = self.train_D_step(x_reals, ys, self.counter).item()
+            log_dict["loss/d"] = self.train_D_step(x_reals, ys).item()
 
             if self.counter % cfg.train_g_interval == 0:
-                log_dict["loss/g"] = self.train_G_step(x_reals, ys, self.counter).item()
+                log_dict["loss/g"] = self.train_G_step(x_reals, ys).item()
                 self.G_ema.update(self.G)
 
             # loss values are associated with models before the optimizer step
@@ -197,13 +198,12 @@ class GANTrainer:
                 self.accelerator.save_state(f"{cfg.checkpoint_path}/step_{self.counter:07d}")
 
             for m in (self.D, self.G):
+                m = m.module if self.accelerator.state.distributed_type == "MULTI_GPU" else m
                 if hasattr(m, "step"):
                     m.step()
 
-            if self.counter >= self.config.n_steps:
+            if self.counter >= total_steps:
                 break
-
-        # self.accelerator.end_training()
 
     def train_D_step(self, x_reals: Tensor, ys: Optional[Tensor]):
         bsize = x_reals.shape[0]
@@ -212,11 +212,6 @@ class GANTrainer:
         with torch.no_grad():
             z_noise = torch.randn(bsize, cfg.z_dim, device=self.accelerator.device)
             x_fakes = self._forward(self.G, z_noise, ys)
-
-        # for progressive growing
-        # F.avg_pool2d() is significantly faster than F.interpolate(mode="bilinear", antialias=True)
-        # if x_reals.shape[-2:] != x_fakes.shape[-2:]:
-        #     x_reals = F.adaptive_avg_pool2d(x_reals, x_fakes.shape[-2:])
 
         if cfg.r1_penalty > 0 and self.counter % cfg.r1_penalty_interval == 0:
             x_reals.requires_grad_()
@@ -234,7 +229,7 @@ class GANTrainer:
 
             if cfg.method == "wgan-gp":
                 alpha = torch.rand(bsize, 1, 1, 1, device=x_reals.device)
-                x_inters = x_reals.lerp(x_fakes, alpha).requires_grad_()
+                x_inters = x_reals.detach().lerp(x_fakes.detach(), alpha).requires_grad_()
                 d_inters = self._forward(self.D, x_inters, ys)
 
                 (d_grad,) = torch.autograd.grad(d_inters.sum(), x_inters, create_graph=True)
@@ -247,7 +242,7 @@ class GANTrainer:
         else:
             raise ValueError(f"Unsupported method {cfg.method}")
 
-        # for Progressive GAN only. may remove?
+        # for Progressive GAN only
         if cfg.drift_penalty > 0:
             loss_d = loss_d + d_reals.square().mean() * cfg.drift_penalty
 
@@ -296,21 +291,22 @@ class GANTrainer:
         return loss_g
 
     @torch.inference_mode()
-    def log_images(self, imgs: Tensor, tag: str, step: int):
+    def log_images(self, imgs: Tensor, tag: str):
         if not self.accelerator.is_main_process or len(self.accelerator.trackers) == 0:
             return
 
-        imgs_np = imgs.cpu().clip_(-1, 1).add_(1).mul_(255 / 2).byte().permute(0, 2, 3, 1).numpy()
+        imgs = imgs.cpu().clip_(-1, 1).add_(1).div_(2)
+        imgs_np = imgs.mul_(255).byte().permute(0, 2, 3, 1).numpy()
 
         for tracker in self.accelerator.trackers:
             if tracker.name == "tensorboard":
-                tracker.tracker.add_images(tag, imgs_np, step, dataformats="NHWC")
+                tracker.tracker.add_images(tag, imgs_np, self.counter, dataformats="NHWC")
 
             elif tracker.name == "wandb":
                 import wandb
 
                 wandb_imgs = [wandb.Image(img) for img in imgs_np]
-                tracker.tracker.log({tag: wandb_imgs}, step=step)
+                tracker.tracker.log({tag: wandb_imgs}, step=self.counter)
 
 
 # reference: https://github.com/lucidrains/ema-pytorch

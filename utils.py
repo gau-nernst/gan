@@ -48,6 +48,7 @@ def get_parser():
     parser.add_argument("--base_depth", type=int)
     parser.add_argument("--batch_size", type=int, default=32)
     parser.add_argument("--num_workers", type=int, default=8)
+    parser.add_argument("--n_steps", type=int, default=10_000)
     parser.add_argument("--img_size", type=int, default=64)
     parser.add_argument("--n_log_imgs", type=int, default=40)
     parser.add_argument("--progressive_growing", action="store_true")

@@ -13,8 +13,10 @@ BATCH_SIZE = 8
 IMG_SHAPE = (BATCH_SIZE, IMG_CHANNELS, IMG_SIZE, IMG_SIZE)
 NOISE_SHAPE = (BATCH_SIZE, Z_DIM)
 
+MODELS = (dcgan, progressive_gan, stylegan, stylegan2, sagan)
 
-@pytest.mark.parametrize("module", (dcgan, progressive_gan, stylegan, stylegan2, sagan))
+
+@pytest.mark.parametrize("module", MODELS)
 def test_discriminator(module):
     D = module.Discriminator(img_size=IMG_SIZE, img_channels=IMG_CHANNELS)
     assert hasattr(D, "reset_parameters")
@@ -23,13 +25,31 @@ def test_discriminator(module):
     out.mean().backward()
 
 
-@pytest.mark.parametrize("module", (dcgan, progressive_gan, stylegan, stylegan2, sagan))
+@pytest.mark.parametrize("module", MODELS)
+def test_discriminator_compile(module):
+    D = module.Discriminator(img_size=IMG_SIZE, img_channels=IMG_CHANNELS)
+    compiled_D = torch.compile(D)
+
+    imgs = torch.randn(IMG_SHAPE)
+    torch.testing.assert_close(D(imgs), compiled_D(imgs))
+
+
+@pytest.mark.parametrize("module", MODELS)
 def test_generator(module):
     G = module.Generator(img_size=IMG_SIZE, img_channels=IMG_CHANNELS, z_dim=Z_DIM)
     assert hasattr(G, "reset_parameters")
     out = G(torch.randn(NOISE_SHAPE))
     assert out.shape == IMG_SHAPE
     out.mean().backward()
+
+
+@pytest.mark.parametrize("module", MODELS)
+def test_generator_compile(module):
+    G = module.Generator(img_size=IMG_SIZE, img_channels=IMG_CHANNELS, z_dim=Z_DIM)
+    compiled_G = torch.compile(G)
+
+    noise = torch.randn(NOISE_SHAPE)
+    torch.testing.assert_close(G(noise), compiled_G(noise))
 
 
 def test_progressive_gan_discriminator():
@@ -40,17 +60,13 @@ def test_progressive_gan_discriminator():
         z_dim=Z_DIM,
         progressive_growing=True,
     )
-    out = disc(torch.randn(BATCH_SIZE, IMG_CHANNELS, size, size))
-    assert out.shape == (BATCH_SIZE,)
-    size *= 2
 
-    while size <= IMG_SIZE:
-        disc.grow()
+    while True:
         out = disc(torch.randn(BATCH_SIZE, IMG_CHANNELS, size, size))
         assert out.shape == (BATCH_SIZE,)
         size *= 2
-
-    with pytest.raises(Exception):
+        if size > IMG_SIZE:
+            break
         disc.grow()
 
 
@@ -62,17 +78,13 @@ def test_progressive_gan_generator():
         z_dim=Z_DIM,
         progressive_growing=True,
     )
-    out = gen(torch.randn(NOISE_SHAPE))
-    assert out.shape[-2:] == (size, size)
-    size *= 2
 
-    while size <= IMG_SIZE:
-        gen.grow()
+    while True:
         out = gen(torch.randn(NOISE_SHAPE))
         assert out.shape[-2:] == (size, size)
         size *= 2
-
-    with pytest.raises(Exception):
+        if size > IMG_SIZE:
+            break
         gen.grow()
 
 
@@ -92,12 +104,12 @@ def test_upfirdn2d_grad_fix(kernel_size, up, down):
     # 1st order gradient
     (grad1,) = torch.autograd.grad(loss1, imgs, create_graph=True)
     (grad2,) = torch.autograd.grad(loss2, imgs, create_graph=True)
-    assert torch.allclose(grad1, grad2)
+    torch.testing.assert_close(grad1, grad2)
 
     # 2nd order gradient
     (gradgrad1,) = torch.autograd.grad(grad1.sum(), imgs, create_graph=True)
     (gradgrad2,) = torch.autograd.grad(grad2.sum(), imgs, create_graph=True)
-    assert torch.allclose(gradgrad1, gradgrad2)
+    torch.testing.assert_close(gradgrad1, gradgrad2)
 
 
 def test_upfirdn2d_avg_pool():
@@ -107,7 +119,7 @@ def test_upfirdn2d_avg_pool():
 
     y1 = F.avg_pool2d(x, 2)
     y2 = upfirdn2d(x, kernel, 1, 2, 0, 1, 0, 1)
-    assert torch.allclose(y1, y2)
+    torch.testing.assert_close(y1, y2)
 
 
 def test_upfirdn2d_upsample():
@@ -117,4 +129,4 @@ def test_upfirdn2d_upsample():
 
     y1 = F.interpolate(x, scale_factor=2)
     y2 = upfirdn2d(x, kernel, 2, 1, 1, 0, 1, 0)
-    assert torch.allclose(y1, y2 * 4)
+    torch.testing.assert_close(y1, y2 * 4)

@@ -12,8 +12,8 @@ from functools import partial
 from typing import Optional
 
 import torch
-from torch import Tensor, nn
 import torch.nn.functional as F
+from torch import Tensor, nn
 from torch.nn.utils import parametrize
 
 from .base import _Act, _Norm, conv1x1, conv3x3, conv_norm_act
