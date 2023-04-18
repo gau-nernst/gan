@@ -19,7 +19,7 @@ from typing import Callable, List, Optional
 import torch
 from torch import Tensor, nn
 
-from .base import _Act, conv1x1, conv3x3
+from .base import _Act, conv1x1, conv3x3, relu
 
 
 _Layer = Callable[[int, int], nn.Module]
@@ -72,7 +72,7 @@ class DiscriminatorBlock(nn.Module):
         out_dim: int,
         first_block: bool = False,
         downsample: bool = True,
-        act: _Act = partial(nn.ReLU, True),
+        act: _Act = relu,
     ):
         super().__init__()
         self.layers = nn.Sequential(
@@ -104,7 +104,7 @@ class Discriminator(nn.Module):
         base_depth: int = 32,
         self_attention_sizes: Optional[List[int]] = None,
         y_layer_factory: _Layer = nn.Embedding,
-        act: _Act = partial(nn.ReLU, True),
+        act: _Act = relu,
     ):
         if self_attention_sizes is None:
             self_attention_sizes = [32]
@@ -151,7 +151,7 @@ class GeneratorStage(nn.Module):
         out_dim: int,
         y_dim: Optional[int] = None,
         y_layer_factory: _Layer = nn.Embedding,
-        act: _Act = partial(nn.ReLU, True),
+        act: _Act = relu,
     ):
         super().__init__()
         norm = partial(ConditionalBatchNorm2d, y_dim=y_dim, y_layer_factory=y_layer_factory)
@@ -187,7 +187,7 @@ class Generator(nn.Module):
         base_depth: int = 32,
         self_attention_sizes: Optional[List[int]] = None,
         y_layer_factory: _Layer = nn.Embedding,
-        act: _Act = partial(nn.ReLU, True),
+        act: _Act = relu,
     ):
         self_attention_sizes = self_attention_sizes or [32]
         super().__init__()

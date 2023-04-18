@@ -8,7 +8,6 @@
 
 import math
 from dataclasses import dataclass, replace
-from functools import partial
 from typing import Optional
 
 import torch
@@ -16,7 +15,7 @@ import torch.nn.functional as F
 from torch import Tensor, nn
 from torch.nn.utils import parametrize
 
-from .base import _Act, _Norm, conv1x1, conv3x3
+from .base import _Act, _Norm, conv1x1, conv3x3, leaky_relu
 from .nvidia_ops import EqualizedLR, MinibatchStdDev, PixelNorm, blur_conv_down, up_conv_blur
 
 
@@ -31,7 +30,7 @@ class ProgressiveGANConfig:
     progressive_growing: bool = False
     fade_duration: int = 50_000
     norm: _Norm = PixelNorm
-    act: _Act = partial(nn.LeakyReLU, 0.2, True)
+    act: _Act = leaky_relu
     blur_size: Optional[int] = None
     residual_D: bool = False
 
