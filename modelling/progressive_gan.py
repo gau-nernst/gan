@@ -29,19 +29,38 @@ class ProgressiveGANConfig:
     max_channels: int = 512
     init_map_size: int = 4
     progressive_growing: bool = False
-    grow_interval: int = 50_000
+    fade_duration: int = 50_000
     norm: _Norm = PixelNorm
     act: _Act = partial(nn.LeakyReLU, 0.2, True)
     blur_size: Optional[int] = None
     residual_D: bool = False
 
 
-def _get_current_stage(step: int, grow_interval: int, max_stage: int) -> tuple[int, float]:
-    if step < grow_interval:
-        return 1, 1.0
+class BaseProgressiveGAN(nn.Module):
+    def __init__(self, config: Optional[ProgressiveGANConfig] = None, **kwargs):
+        config = config or ProgressiveGANConfig()
+        config = replace(config, **kwargs)
+        assert config.img_size > 4 and math.log2(config.img_size).is_integer()
+        super().__init__()
+        self.config = config
+        self.total_stages = int(math.log2(config.img_size // config.init_map_size)) + 1
 
-    q, r = divmod(step - grow_interval, grow_interval * 2)
-    return min(q + 2, max_stage), min(r / grow_interval, 1.0)
+        self.register_buffer("fade_alpha", torch.tensor(1.0))
+        self.register_buffer("current_stage", torch.tensor(1 if config.progressive_growing else self.total_stages))
+        self.fade_alpha: Tensor
+        self.current_stage: Tensor
+
+    def reset_parameters(self):
+        self.apply(init_weights)
+
+    def step(self):
+        self.fade_alpha.add_(1 / self.config.fade_duration).clamp_(0.0, 1.0)
+
+    def grow(self):
+        if self.current_stage >= self.total_stages:
+            raise RuntimeError("Cannot grow anymore")
+        self.current_stage += 1
+        self.fade_alpha.fill_(0.0)
 
 
 class DiscriminatorStage(nn.Module):
@@ -85,19 +104,10 @@ class DiscriminatorStage(nn.Module):
         return out
 
 
-class Discriminator(nn.Module):
+class Discriminator(BaseProgressiveGAN):
     def __init__(self, config: Optional[ProgressiveGANConfig] = None, **kwargs):
-        config = config or ProgressiveGANConfig()
-        config = replace(config, **kwargs)
-        assert config.img_size > 4 and math.log2(config.img_size).is_integer()
-        super().__init__()
-        self.config = config
-        self.total_stages = int(math.log2(config.img_size // config.init_map_size)) + 1
-
-        step_counter = 0 if config.progressive_growing else config.grow_interval * self.total_stages * 2
-        self.register_buffer("step_counter", torch.tensor(step_counter))
-        self.step_counter: Tensor
-
+        super().__init__(config, **kwargs)
+        config = self.config
         self.from_rgb = nn.ModuleList()
         self.stages = nn.ModuleList()
 
@@ -110,29 +120,21 @@ class Discriminator(nn.Module):
 
         self.reset_parameters()
 
-    def reset_parameters(self):
-        self.apply(init_weights)
-
     def forward(self, imgs: Tensor):
-        curr_stage, t = _get_current_stage(self.step_counter.item(), self.config.grow_interval, self.total_stages)
+        curr_stage = self.total_stages - self.current_stage.item()
 
-        out = self.from_rgb[-curr_stage](imgs)
-        out = self.stages[-curr_stage](out)
-        if curr_stage == 1:
-            return out.view(-1)
+        out = self.from_rgb[curr_stage](imgs)
+        out = self.stages[curr_stage](out)
 
-        if t < 1.0:
+        if self.fade_alpha < 1.0:
             # F.interpolate() is 20% faster than F.avg_pool() on RTX 3090
             prev_out = F.interpolate(imgs, scale_factor=0.5, mode="bilinear")
-            prev_out = self.from_rgb[-curr_stage + 1](prev_out)
-            out = prev_out.lerp(out, t)
+            prev_out = self.from_rgb[curr_stage + 1](prev_out)
+            out = prev_out.lerp(out, self.fade_alpha)
 
-        for stage in self.stages[-curr_stage + 1 :]:
+        for stage in self.stages[curr_stage + 1 :]:
             out = stage(out)
         return out.view(-1)
-
-    def step(self):
-        self.step_counter += 1
 
 
 class GeneratorStage(nn.Sequential):
@@ -154,21 +156,11 @@ class GeneratorStage(nn.Sequential):
         )
 
 
-class Generator(nn.Module):
+class Generator(BaseProgressiveGAN):
     def __init__(self, config: Optional[ProgressiveGANConfig] = None, **kwargs):
-        config = config or ProgressiveGANConfig()
-        config = replace(config, **kwargs)
-        assert config.img_size > 4 and math.log2(config.img_size).is_integer()
-        super().__init__()
-        self.config = config
-        self.total_stages = int(math.log2(config.img_size // config.init_map_size)) + 1
-
-        step_counter = 0 if config.progressive_growing else config.grow_interval * self.total_stages * 2
-        self.register_buffer("step_counter", torch.tensor(step_counter))
-        self.step_counter: Tensor
-
+        super().__init__(config, **kwargs)
+        config = self.config
         self.input_norm = config.norm(config.z_dim)
-
         self.stages = nn.ModuleList()
         self.to_rgb = nn.ModuleList()
 
@@ -182,26 +174,20 @@ class Generator(nn.Module):
 
         self.reset_parameters()
 
-    def reset_parameters(self):
-        self.apply(init_weights)
-
     def forward(self, z_embs: Tensor):
-        curr_stage, t = _get_current_stage(self.step_counter.item(), self.config.grow_interval, self.total_stages)
+        curr_stage = self.current_stage.item()
 
         out = self.input_norm(z_embs[..., None, None])
-        for i in range(curr_stage):
-            prev_out, out = out, self.stages[i](out)
+        for stage in self.stages[:curr_stage]:
+            prev_out, out = out, stage(out)
         out = self.to_rgb[curr_stage - 1](out)
 
-        if t < 1.0:
+        if self.fade_alpha < 1.0:
             prev_out = self.to_rgb[curr_stage - 2](prev_out)
             prev_out = F.interpolate(prev_out, scale_factor=2, mode="nearest")
-            out = prev_out.lerp(out, t)
+            out = prev_out.lerp(out, self.fade_alpha)
 
         return out
-
-    def step(self):
-        self.step_counter += 1
 
 
 def init_weights(module: nn.Module):
