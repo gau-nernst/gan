@@ -10,7 +10,7 @@ from functools import partial
 
 from torch import Tensor, nn
 
-from .base import _Act, _Norm
+from .base import _Act, _Norm, conv_norm_act
 
 
 class Discriminator(nn.Module):
@@ -29,7 +29,7 @@ class Discriminator(nn.Module):
         # add strided conv until image size = 4
         conv = partial(nn.Conv2d, kernel_size=4, stride=2, padding=1, bias=False)
         while img_size > init_map_size:
-            self.layers.extend([conv(img_channels, min_channels), norm(min_channels), act()])
+            self.layers.append(conv_norm_act(img_channels, min_channels, conv, norm, act))
             img_channels = min_channels
             min_channels *= 2
             img_size //= 2
@@ -62,18 +62,17 @@ class Generator(nn.Module):
 
         # matmul and reshape to 4x4
         channels = min_channels * img_size // 2 // init_map_size
-        first_conv = partial(nn.ConvTranspose2d, kernel_size=init_map_size, bias=False)
-        self.layers.extend([first_conv(z_dim, channels), norm(channels), act()])
+        self.layers.append(conv_norm_act(z_dim, channels, nn.ConvTranspose2d, norm, act, kernel_size=init_map_size))
 
         # conv transpose until reaching image size / 2
-        conv = partial(nn.ConvTranspose2d, kernel_size=4, stride=2, padding=1, bias=False)
+        conv = partial(nn.ConvTranspose2d, kernel_size=4, stride=2, padding=1)
         while init_map_size < img_size // 2:
-            self.layers.extend([conv(channels, channels // 2), norm(channels // 2), act()])
+            self.layers.append(conv_norm_act(channels, channels // 2, conv, norm, act))
             channels //= 2
             init_map_size *= 2
 
         # last layer use tanh activation
-        self.layers.extend([conv(channels, img_channels, bias=True), nn.Tanh()])
+        self.layers.extend([conv(channels, img_channels), nn.Tanh()])
 
         self.reset_parameters()
 
