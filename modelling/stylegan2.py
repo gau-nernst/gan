@@ -14,7 +14,7 @@ import torch.nn.functional as F
 from torch import Tensor, nn
 
 from .nvidia_ops import Blur
-from .progressive_gan import Discriminator, init_weights
+from .progressive_gan import ProgressiveGANDiscriminator, init_weights
 from .stylegan import MappingNetwork, StyleGANConfig
 
 
@@ -27,7 +27,7 @@ class StyleGAN2Config(StyleGANConfig):
     residual_D: bool = True
 
 
-class Discriminator(Discriminator):
+class StyleGAN2Discriminator(ProgressiveGANDiscriminator):
     def __init__(self, config: Optional[StyleGAN2Config] = None, **kwargs):
         config = config or StyleGAN2Config()
         config = replace(config, **kwargs)
@@ -56,7 +56,7 @@ class ModulatedConv2d(nn.Module):
         return imgs
 
 
-class GeneratorBlock(nn.Module):
+class StyleGAN2GeneratorBlock(nn.Module):
     def __init__(self, in_dim: int, out_dim: int, config: StyleGAN2Config, upsample: bool = False):
         super().__init__()
         # TODO: merge upsample with conv into conv_transpose (up_conv_blur)
@@ -78,7 +78,7 @@ class RGBLayer(ModulatedConv2d):
         super().__init__(in_dim, config.img_channels, 1, config.w_dim, demodulation=False)
 
 
-class Generator(nn.Module):
+class StyleGAN2Generator(nn.Module):
     def __init__(self, config: Optional[StyleGAN2Config] = None, **kwargs):
         config = config or StyleGAN2Config()
         config = replace(config, **kwargs)
@@ -94,7 +94,7 @@ class Generator(nn.Module):
         depth = config.min_channels * config.img_size // map_size
         out_depth = min(depth, config.max_channels)
 
-        self.first_block = GeneratorBlock(in_depth, out_depth, config)
+        self.first_block = StyleGAN2GeneratorBlock(in_depth, out_depth, config)
         self.first_to_rgb = RGBLayer(out_depth, config)
         in_depth = out_depth
         depth //= 2
@@ -103,8 +103,8 @@ class Generator(nn.Module):
         while map_size < config.img_size:
             out_depth = min(depth, config.max_channels)
             stage = dict(
-                block1=GeneratorBlock(in_depth, out_depth, config, upsample=True),
-                block2=GeneratorBlock(out_depth, out_depth, config),
+                block1=StyleGAN2GeneratorBlock(in_depth, out_depth, config, upsample=True),
+                block2=StyleGAN2GeneratorBlock(out_depth, out_depth, config),
                 to_rgb=RGBLayer(out_depth, config),
             )
             self.stages.append(nn.ModuleDict(stage))

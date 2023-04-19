@@ -13,7 +13,7 @@ from torch import Tensor, nn
 from .base import _Act, _Norm, conv_norm_act, leaky_relu, relu
 
 
-class Discriminator(nn.Module):
+class DCGANDiscriminator(nn.Module):
     def __init__(
         self,
         img_size: int = 64,
@@ -46,7 +46,7 @@ class Discriminator(nn.Module):
         return self.layers(imgs).view(-1)
 
 
-class Generator(nn.Module):
+class DCGANGenerator(nn.Module):
     def __init__(
         self,
         img_size: int = 64,

@@ -14,7 +14,7 @@ from torch import Tensor, nn
 
 from .base import conv1x1, conv3x3
 from .nvidia_ops import PixelNorm, up_conv_blur
-from .progressive_gan import Discriminator, ProgressiveGANConfig, init_weights
+from .progressive_gan import ProgressiveGANConfig, ProgressiveGANDiscriminator, init_weights
 
 
 @dataclass
@@ -30,7 +30,7 @@ class StyleGANConfig(ProgressiveGANConfig):
     norm: None = None
 
 
-class Discriminator(Discriminator):
+class StyleGANDiscriminator(ProgressiveGANDiscriminator):
     def __init__(self, config: Optional[StyleGANConfig] = None, **kwargs):
         config = config or StyleGANConfig()
         config = replace(config, **kwargs)
@@ -80,7 +80,7 @@ class MappingNetwork(nn.Module):
         return w_embs
 
 
-class GeneratorBlock(nn.Module):
+class StyleGANGeneratorBlock(nn.Module):
     def __init__(
         self,
         in_dim: int,
@@ -112,7 +112,7 @@ class GeneratorBlock(nn.Module):
         return self.norm(imgs) * (style_weight + 1) + style_bias
 
 
-class Generator(nn.Module):
+class StyleGANGenerator(nn.Module):
     def __init__(self, config: Optional[StyleGANConfig] = None, **kwargs):
         config = config or StyleGANConfig()
         config = replace(config, **kwargs)
@@ -128,15 +128,15 @@ class Generator(nn.Module):
         out_depth = min(depth, config.max_channels)
 
         self.layers = nn.ModuleList()
-        self.layers.append(GeneratorBlock(in_depth, in_depth, config, first_block=True))
-        self.layers.append(GeneratorBlock(in_depth, out_depth, config))
+        self.layers.append(StyleGANGeneratorBlock(in_depth, in_depth, config, first_block=True))
+        self.layers.append(StyleGANGeneratorBlock(in_depth, out_depth, config))
         in_depth = out_depth
         depth //= 2
 
         while map_size < config.img_size:
             out_depth = min(depth, config.max_channels)
-            self.layers.append(GeneratorBlock(in_depth, out_depth, config, upsample=True))
-            self.layers.append(GeneratorBlock(out_depth, out_depth, config))
+            self.layers.append(StyleGANGeneratorBlock(in_depth, out_depth, config, upsample=True))
+            self.layers.append(StyleGANGeneratorBlock(out_depth, out_depth, config))
             in_depth = out_depth
             depth //= 2
             map_size *= 2

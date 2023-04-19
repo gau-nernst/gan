@@ -61,7 +61,7 @@ class BaseProgressiveGAN(nn.Module):
         self.fade_alpha.fill_(0.0)
 
 
-class DiscriminatorStage(nn.Module):
+class ProgressiveGANDiscriminatorStage(nn.Module):
     def __init__(self, in_channels: int, out_channels: int, config: ProgressiveGANConfig):
         super().__init__()
         self.main = nn.Sequential(
@@ -83,7 +83,7 @@ class DiscriminatorStage(nn.Module):
         return out
 
 
-class Discriminator(BaseProgressiveGAN):
+class ProgressiveGANDiscriminator(BaseProgressiveGAN):
     def __init__(self, config: Optional[ProgressiveGANConfig] = None, **kwargs):
         super().__init__(config, **kwargs)
         config = self.config
@@ -95,7 +95,7 @@ class Discriminator(BaseProgressiveGAN):
             self.from_rgb.append(nn.Sequential(conv1x1(config.img_channels, in_channels), config.act()))
 
             out_channels = min(config.min_channels * 2 ** (i + 1), config.max_channels)
-            self.stages.append(DiscriminatorStage(in_channels, out_channels, config))
+            self.stages.append(ProgressiveGANDiscriminatorStage(in_channels, out_channels, config))
             in_channels = out_channels
 
         self.from_rgb.append(nn.Sequential(conv1x1(config.img_channels, in_channels), config.act()))
@@ -130,7 +130,7 @@ class Discriminator(BaseProgressiveGAN):
         return out.view(-1)
 
 
-class Generator(BaseProgressiveGAN):
+class ProgressiveGANGenerator(BaseProgressiveGAN):
     def __init__(self, config: Optional[ProgressiveGANConfig] = None, **kwargs):
         super().__init__(config, **kwargs)
         config = self.config

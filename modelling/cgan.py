@@ -10,7 +10,7 @@ import torch
 from torch import Tensor, nn
 
 
-class Discriminator(nn.Module):
+class CGANDiscriminator(nn.Module):
     def __init__(self, D: nn.Module, y_encoder: nn.Module):
         super().__init__()
         self.D = D
@@ -24,7 +24,7 @@ class Discriminator(nn.Module):
         return self.D(imgs)
 
 
-class Generator(nn.Module):
+class CGANGenerator(nn.Module):
     def __init__(self, G: nn.Module, y_encoder: nn.Module):
         super().__init__()
         self.G = G

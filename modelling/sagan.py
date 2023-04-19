@@ -65,7 +65,7 @@ class SelfAttentionConv2d(nn.Module):
         return imgs + self.out_conv(out.view(b, -1, h, w)) * self.scale
 
 
-class DiscriminatorBlock(nn.Module):
+class SAGANDiscriminatorBlock(nn.Module):
     def __init__(
         self,
         in_dim: int,
@@ -94,7 +94,7 @@ class DiscriminatorBlock(nn.Module):
         return self.layers(imgs) + self.shortcut(imgs)
 
 
-class Discriminator(nn.Module):
+class SAGANDiscriminator(nn.Module):
     def __init__(
         self,
         img_size: int,
@@ -109,7 +109,7 @@ class Discriminator(nn.Module):
         if self_attention_sizes is None:
             self_attention_sizes = [32]
         super().__init__()
-        block = partial(DiscriminatorBlock, act=act)
+        block = partial(SAGANDiscriminatorBlock, act=act)
         self.layers = nn.Sequential()
         self.layers.append(block(img_channels, base_depth, first_block=True))
         img_size //= 2
@@ -144,7 +144,7 @@ class Discriminator(nn.Module):
         return logits
 
 
-class GeneratorStage(nn.Module):
+class SAGANGeneratorStage(nn.Module):
     def __init__(
         self,
         in_dim: int,
@@ -176,7 +176,7 @@ class GeneratorStage(nn.Module):
         return imgs + shortcut
 
 
-class Generator(nn.Module):
+class SAGANGenerator(nn.Module):
     def __init__(
         self,
         img_size: int,
@@ -191,7 +191,7 @@ class Generator(nn.Module):
     ):
         self_attention_sizes = self_attention_sizes or [32]
         super().__init__()
-        stage = partial(GeneratorStage, y_dim=y_dim, y_layer_factory=y_layer_factory, act=act)
+        stage = partial(SAGANGeneratorStage, y_dim=y_dim, y_layer_factory=y_layer_factory, act=act)
         depth = base_depth * img_size // smallest_map_size // 2
 
         self.layers = nn.ModuleList()
@@ -219,7 +219,7 @@ class Generator(nn.Module):
     def forward(self, z_embs: Tensor, ys: Optional[Tensor] = None):
         out = z_embs.view(*z_embs.shape, 1, 1)
         for layer in self.layers:
-            out = layer(out, ys) if isinstance(layer, GeneratorStage) else layer(out)
+            out = layer(out, ys) if isinstance(layer, SAGANGeneratorStage) else layer(out)
         return out
 
 
