@@ -45,6 +45,7 @@ def cycle(iterable):
 @dataclass
 class GANTrainerConfig:
     conditional: bool = False
+    img2img: bool = False
     z_dim: int = 128
     method: Literal["gan", "wgan", "wgan-gp", "hinge"] = "gan"
     spectral_norm_d: bool = False
@@ -74,6 +75,7 @@ class GANTrainerConfig:
     log_interval: int = 50
     log_img_interval: int = 1_000
     find_unused_parameters: bool = False
+    channels_last: bool = False
 
 
 class GANTrainer:
@@ -110,7 +112,11 @@ class GANTrainer:
             D.apply(disable_bn_running_stats)
             G.apply(disable_bn_running_stats)
 
-        optim_d, optim_g = self.build_optimizers(config, D, G)
+        if config.channels_last:
+            D = D.to(memory_format=torch.channels_last)
+            G = G.to(memory_format=torch.channels_last)
+
+        optim_d, optim_g = build_optimizers(config, D, G)
         D, G, optim_d, optim_g = accelerator.prepare(D, G, optim_d, optim_g)
 
         if config.resume_from_checkpoint is not None:
@@ -133,30 +139,6 @@ class GANTrainer:
         self.fixed_y = fixed_y.to(accelerator.device)
         self.counter = 0
 
-    @staticmethod
-    def build_optimizers(config: GANTrainerConfig, D: nn.Module, G: nn.Module):
-        optim_cls = getattr(torch.optim, config.optimizer)
-        kwargs: dict[str, Any] = dict(weight_decay=config.weight_decay)
-        if config.optimizer in ("Adam", "AdamW"):
-            kwargs.update(betas=(config.beta1, config.beta2))
-
-        optim_d = optim_cls(D.parameters(), lr=config.lr_d, **kwargs)
-
-        if hasattr(G, "mapping_network") and isinstance(G.mapping_network, nn.Module):  # stylegan
-            group1 = [p for name, p in G.named_parameters() if not name.startswith("mapping_network.")]
-            group2 = list(G.mapping_network.parameters())
-            assert len(group1) + len(group2) == len(list(G.parameters()))
-            param_groups = [
-                dict(params=group1, lr=config.lr_g),
-                dict(params=group2, lr=config.lr_g / 100),
-            ]
-            optim_g = optim_cls(param_groups, **kwargs)
-        else:
-            param_groups = [dict(params=list(G.parameters()))]
-        optim_g = optim_cls(param_groups, lr=config.lr_g, **kwargs)
-
-        return optim_d, optim_g
-
     def _forward(self, m: nn.Module, xs: Tensor, ys: Optional[Tensor]) -> Tensor:
         return m(xs, ys) if self.config.conditional else m(xs)
 
@@ -175,10 +157,15 @@ class GANTrainer:
         )
 
         for x_reals, ys in pbar:
+            if cfg.channels_last:
+                x_reals = x_reals.to(memory_format=torch.channels_last)
+                if ys.dim() == 4:
+                    ys = ys.to(torch.channels_last)
+
             if self.counter % cfg.log_img_interval == 0 and self.accelerator.is_main_process:
                 with torch.inference_mode(), self.G_ema.swap_state_dict(self.G):
                     x_fakes = self._forward(self.G, self.fixed_z, self.fixed_y)
-                self.log_images(x_fakes, "generated")
+                log_images(self.accelerator, x_fakes, "generated", self.counter)
 
             log_dict: dict[str, Any] = dict()
             log_dict["loss/d"] = self.train_D_step(x_reals, ys).item()
@@ -209,6 +196,13 @@ class GANTrainer:
         bsize = x_reals.shape[0]
         cfg = self.config
 
+        # Algorithm 1 in paper clip weights after optimizer step, but GitHub code clip before optimizer step
+        # it shouldn't matter much in practice
+        if cfg.method == "wgan":
+            with torch.no_grad():
+                for param in self.D.parameters():
+                    param.clip_(-cfg.wgan_clip, cfg.wgan_clip)
+
         with torch.no_grad():
             z_noise = torch.randn(bsize, cfg.z_dim, device=self.accelerator.device)
             x_fakes = self._forward(self.G, z_noise, ys)
@@ -219,31 +213,16 @@ class GANTrainer:
         d_reals = self._forward(self.D, x_reals, ys)
         d_fakes = self._forward(self.D, x_fakes, ys)
 
-        if cfg.method == "gan":
-            loss_d_real = -F.logsigmoid(d_reals).mean() * (1.0 - cfg.label_smoothing)
-            loss_d_fake = -F.logsigmoid(-d_fakes).mean()
-            loss_d = loss_d_real + loss_d_fake
+        loss_d = compute_d_loss(d_reals, d_fakes, cfg.method)
 
-        elif cfg.method in ("wgan", "wgan-gp"):
-            loss_d = d_fakes.mean() - d_reals.mean()
+        if cfg.method == "wgan-gp":
+            alpha = torch.rand(bsize, 1, 1, 1, device=x_reals.device)
+            x_inters = x_reals.detach().lerp(x_fakes.detach(), alpha).requires_grad_()
+            d_inters = self._forward(self.D, x_inters, ys)
 
-            if cfg.method == "wgan-gp":
-                alpha = torch.rand(bsize, 1, 1, 1, device=x_reals.device)
-                x_inters = x_reals.detach().lerp(x_fakes.detach(), alpha).requires_grad_()
-                d_inters = self._forward(self.D, x_inters, ys)
-
-                (d_grad,) = torch.autograd.grad(d_inters.sum(), x_inters, create_graph=True)
-                d_grad_norm = torch.linalg.vector_norm(d_grad, dim=(1, 2, 3))
-                loss_d = loss_d + cfg.wgan_gp_lamb * (d_grad_norm - 1).square().mean()
-
-        elif cfg.method == "hinge":
-            loss_d = F.relu(1 - d_reals).mean() + F.relu(1 + d_fakes).mean()
-
-        elif cfg.method == "lsgan":
-            loss_d = (d_reals - 1).square().mean() + d_fakes.square().mean()
-
-        else:
-            raise ValueError(f"Unsupported method {cfg.method}")
+            (d_grad,) = torch.autograd.grad(d_inters.sum(), x_inters, create_graph=True)
+            d_grad_norm = torch.linalg.vector_norm(d_grad, dim=(1, 2, 3))
+            loss_d = loss_d + cfg.wgan_gp_lamb * (d_grad_norm - 1).square().mean()
 
         # for Progressive GAN only
         if cfg.drift_penalty > 0:
@@ -259,13 +238,6 @@ class GANTrainer:
         self.accelerator.backward(loss_d)
         self.optim_d.step()
 
-        # Algorithm 1 in paper clip weights after optimizer step, but GitHub code clip before optimizer step
-        # it shouldn't matter much in practice
-        if cfg.method == "wgan":
-            with torch.no_grad():
-                for param in self.D.parameters():
-                    param.clip_(-cfg.wgan_clip, cfg.wgan_clip)
-
         return loss_d
 
     def train_G_step(self, x_reals: Tensor, ys: Optional[Tensor]):
@@ -277,18 +249,7 @@ class GANTrainer:
         x_fakes = self._forward(self.G, z_noise, ys)
         d_fakes = self._forward(self.D, x_fakes, ys)
 
-        if cfg.method == "gan":
-            loss_g = -F.logsigmoid(d_fakes).mean()
-
-        elif cfg.method in ("wgan", "wgan-gp", "hinge"):
-            loss_g = -d_fakes.mean()
-
-        elif cfg.method == "lsgan":
-            loss_g = (d_fakes - 1).square().mean()
-
-        else:
-            raise ValueError(f"Unsupported method {cfg.method}")
-
+        loss_g = compute_g_loss(d_fakes, cfg.method)
         self.optim_g.zero_grad(set_to_none=True)
         self.accelerator.backward(loss_g)
         self.optim_g.step()
@@ -296,23 +257,87 @@ class GANTrainer:
         self.D.requires_grad_(True)
         return loss_g
 
-    @torch.inference_mode()
-    def log_images(self, imgs: Tensor, tag: str):
-        if not self.accelerator.is_main_process or len(self.accelerator.trackers) == 0:
-            return
 
-        imgs = imgs.cpu().clip_(-1, 1).add_(1).div_(2)
-        imgs_np = imgs.mul_(255).byte().permute(0, 2, 3, 1).numpy()
+def compute_g_loss(d_fakes: Tensor, method: str):
+    if method == "gan":
+        loss_g = -F.logsigmoid(d_fakes).mean()
 
-        for tracker in self.accelerator.trackers:
-            if tracker.name == "tensorboard":
-                tracker.tracker.add_images(tag, imgs_np, self.counter, dataformats="NHWC")
+    elif method in ("wgan", "wgan-gp", "hinge"):
+        loss_g = -d_fakes.mean()
 
-            elif tracker.name == "wandb":
-                import wandb
+    elif method == "lsgan":
+        loss_g = (d_fakes - 1).square().mean()
 
-                wandb_imgs = [wandb.Image(img) for img in imgs_np]
-                tracker.tracker.log({tag: wandb_imgs}, step=self.counter)
+    else:
+        raise ValueError(f"Unsupported method {method}")
+
+    return loss_g
+
+
+def compute_d_loss(d_reals: Tensor, d_fakes: Tensor, method: str):
+    if method == "gan":
+        loss_d_real = -F.logsigmoid(d_reals).mean() * (1.0 - cfg.label_smoothing)
+        loss_d_fake = -F.logsigmoid(-d_fakes).mean()
+        loss_d = loss_d_real + loss_d_fake
+
+    elif method in ("wgan", "wgan-gp"):
+        loss_d = d_fakes.mean() - d_reals.mean()
+
+    elif method == "hinge":
+        loss_d = F.relu(1 - d_reals).mean() + F.relu(1 + d_fakes).mean()
+
+    elif method == "lsgan":
+        loss_d = (d_reals - 1).square().mean() + d_fakes.square().mean()
+
+    else:
+        raise ValueError(f"Unsupported method {method}")
+
+    return loss_d
+
+
+def build_optimizers(config: GANTrainerConfig, dis: nn.Module, gen: nn.Module):
+    optim_cls = getattr(torch.optim, config.optimizer)
+    kwargs: dict[str, Any] = dict(weight_decay=config.weight_decay)
+    if config.optimizer in ("Adam", "AdamW"):
+        kwargs.update(betas=(config.beta1, config.beta2))
+
+    optim_d = optim_cls(dis.parameters(), lr=config.lr_d, **kwargs)
+
+    # stylegan
+    if hasattr(gen, "mapping_network") and isinstance(gen.mapping_network, nn.Module):
+        group1 = [p for name, p in gen.named_parameters() if not name.startswith("mapping_network.")]
+        group2 = list(gen.mapping_network.parameters())
+        assert len(group1) + len(group2) == len(list(gen.parameters()))
+        param_groups = [
+            dict(params=group1, lr=config.lr_g),
+            dict(params=group2, lr=config.lr_g / 100),
+        ]
+        optim_g = optim_cls(param_groups, **kwargs)
+    else:
+        param_groups = [dict(params=list(gen.parameters()))]
+
+    optim_g = optim_cls(param_groups, lr=config.lr_g, **kwargs)
+
+    return optim_d, optim_g
+
+
+@torch.inference_mode()
+def log_images(accelerator: Accelerator, imgs: Tensor, tag: str, step: int):
+    if not accelerator.is_main_process or len(accelerator.trackers) == 0:
+        return
+
+    imgs = imgs.cpu().clip_(-1, 1).add_(1).div_(2)
+    imgs_np = imgs.mul_(255).byte().permute(0, 2, 3, 1).numpy()
+
+    for tracker in accelerator.trackers:
+        if tracker.name == "tensorboard":
+            tracker.tracker.add_images(tag, imgs_np, step, dataformats="NHWC")
+
+        elif tracker.name == "wandb":
+            import wandb
+
+            wandb_imgs = [wandb.Image(img) for img in imgs_np]
+            tracker.tracker.log({tag: wandb_imgs}, step=step)
 
 
 # reference: https://github.com/lucidrains/ema-pytorch
