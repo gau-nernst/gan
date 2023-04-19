@@ -12,8 +12,8 @@ from .base import _Act, _Norm, conv_norm_act, leaky_relu, relu
 class PatchGAN(nn.Module):
     def __init__(
         self,
-        img_channels: int,
-        y_channels: int,
+        A_channels: int = 3,
+        B_channels: int = 3,
         base_channels: int = 64,
         n_layers: int = 3,
         norm: _Norm = nn.InstanceNorm2d,
@@ -22,7 +22,7 @@ class PatchGAN(nn.Module):
         super().__init__()
         self.layers = nn.Sequential()
         conv4x4 = partial(nn.Conv2d, kernel_size=4, padding=1)
-        in_channels = img_channels + y_channels
+        in_channels = A_channels + B_channels
 
         def get_out_c(idx: int):
             return base_channels * 2 ** min(idx, 3)
@@ -42,8 +42,8 @@ class PatchGAN(nn.Module):
 class UnetGenerator(nn.Module):
     def __init__(
         self,
-        in_channels: int,
-        out_channels: int,
+        A_channels: int = 3,
+        B_channels: int = 3,
         n_stages: int = 7,
         base_channels: int = 64,
         dropout: float = 0.5,
@@ -66,7 +66,7 @@ class UnetGenerator(nn.Module):
             )
 
         self.downs = nn.ModuleList()
-        self.downs.append(down_conv(in_channels, base_channels))
+        self.downs.append(down_conv(A_channels, base_channels))
         for i in range(1, n_stages - 1):
             self.downs.append(act_conv_norm(get_out_c(i - 1), get_out_c(i), True))
 
@@ -82,9 +82,9 @@ class UnetGenerator(nn.Module):
         for i in range(n_stages - 2, 0, -1):
             self.ups.append(act_conv_norm(get_out_c(i) * 2, get_out_c(i - 1), False))
             self.ups[-1].append(nn.Dropout(dropout))
-        self.ups.append(nn.Sequential(up_act(), up_conv(get_out_c(0) * 2, out_channels), nn.Tanh()))
+        self.ups.append(nn.Sequential(up_act(), up_conv(get_out_c(0) * 2, B_channels), nn.Tanh()))
 
-    def forward(self, z_embs: Tensor, imgs: Tensor):
+    def forward(self, imgs: Tensor):
         fmaps = []
         for down in self.downs:
             imgs = down(imgs)
