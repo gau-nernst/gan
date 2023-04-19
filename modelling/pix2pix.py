@@ -9,28 +9,34 @@ from torch import Tensor, nn
 from .base import _Act, _Norm, conv_norm_act, leaky_relu, relu
 
 
-class PatchGAN(nn.Sequential):
+class PatchGAN(nn.Module):
     def __init__(
         self,
-        in_channels: int,
+        img_channels: int,
+        y_channels: int,
         base_channels: int = 64,
         n_layers: int = 3,
         norm: _Norm = nn.InstanceNorm2d,
         act: _Act = leaky_relu,
     ):
         super().__init__()
+        self.layers = nn.Sequential()
         conv4x4 = partial(nn.Conv2d, kernel_size=4, padding=1)
+        in_channels = img_channels + y_channels
 
         def get_out_c(idx: int):
             return base_channels * 2 ** min(idx, 3)
 
-        self.append(nn.Sequential(conv4x4(in_channels, base_channels, stride=2), act()))
+        self.layers.append(nn.Sequential(conv4x4(in_channels, base_channels, stride=2), act()))
 
         for i in range(1, n_layers):
-            self.append(conv_norm_act(get_out_c(i - 1), get_out_c(i), conv4x4, norm, act, stride=2))
+            self.layers.append(conv_norm_act(get_out_c(i - 1), get_out_c(i), conv4x4, norm, act, stride=2))
 
-        self.append(conv_norm_act(get_out_c(n_layers - 1), get_out_c(n_layers), conv4x4, norm, act))
-        self.append(conv4x4(get_out_c(n_layers), 1))
+        self.layers.append(conv_norm_act(get_out_c(n_layers - 1), get_out_c(n_layers), conv4x4, norm, act))
+        self.layers.append(conv4x4(get_out_c(n_layers), 1))
+
+    def forward(self, imgs: Tensor, ys: Tensor):
+        return self.layers(torch.cat([imgs, ys], dim=1))
 
 
 class UnetGenerator(nn.Module):
@@ -38,8 +44,9 @@ class UnetGenerator(nn.Module):
         self,
         in_channels: int,
         out_channels: int,
-        n_stages: int,
+        n_stages: int = 7,
         base_channels: int = 64,
+        dropout: float = 0.5,
         norm: _Norm = nn.InstanceNorm2d,
         down_act: _Act = leaky_relu,
         up_act: _Act = relu,
@@ -74,9 +81,10 @@ class UnetGenerator(nn.Module):
         self.ups = nn.ModuleList()
         for i in range(n_stages - 2, 0, -1):
             self.ups.append(act_conv_norm(get_out_c(i) * 2, get_out_c(i - 1), False))
+            self.ups[-1].append(nn.Dropout(dropout))
         self.ups.append(nn.Sequential(up_act(), up_conv(get_out_c(0) * 2, out_channels), nn.Tanh()))
 
-    def forward(self, imgs: Tensor):
+    def forward(self, z_embs: Tensor, imgs: Tensor):
         fmaps = []
         for down in self.downs:
             imgs = down(imgs)
