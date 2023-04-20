@@ -9,6 +9,8 @@ import torch.nn.functional as F
 from accelerate import Accelerator, DistributedDataParallelKwargs
 from accelerate.state import AcceleratorState
 from torch import Tensor, nn
+from torch.utils.data import DataLoader
+from tqdm import tqdm
 
 
 def cuda_speed_up():
@@ -76,7 +78,7 @@ class BaseTrainerConfig:
 
 
 class BaseTrainer:
-    def __init__(self, config: BaseTrainerConfig, dis: nn.Module, gen: nn.Module, fixed_z: Tensor, fixed_y: Tensor):
+    def __init__(self, config: BaseTrainerConfig, dis: nn.Module, gen: nn.Module):
         assert config.wgan_clip > 0
         config = copy.deepcopy(config)
         config.lr_d = config.lr_d or config.lr
@@ -131,9 +133,42 @@ class BaseTrainer:
         self.g_ema = g_ema
         self.optim_d = optim_d
         self.optim_g = optim_g
-        self.fixed_z = fixed_z.to(accelerator.device)
-        self.fixed_y = fixed_y.to(accelerator.device)
         self.counter = 0
+
+    def train(self, dloader: DataLoader, n_steps: int):
+        cfg = self.config
+        dloader = self.accelerator.prepare(dloader)
+
+        total_steps = self.counter + n_steps
+        pbar = tqdm(
+            cycle(dloader),
+            total=total_steps,
+            initial=self.counter,
+            leave=False,
+            dynamic_ncols=True,
+            disable=not self.accelerator.is_main_process,
+        )
+
+        for data in pbar:
+            if isinstance(data, Tensor):
+                data = (data,)
+            log_dict = self.train_step(*data)
+
+            # loss values are associated with models before the optimizer step
+            # therefore, increment `step` after logging
+            if self.counter % cfg.log_interval == 0:
+                self.accelerator.log(log_dict, step=self.counter)
+
+            self.counter += 1
+
+            if self.counter % cfg.checkpoint_interval == 0:
+                self.accelerator.save_state(f"{cfg.checkpoint_path}/step_{self.counter:07d}")
+
+            if self.counter >= total_steps:
+                break
+
+    def train_step(self, *args):
+        raise NotImplementedError
 
 
 def compute_g_loss(d_fakes: Tensor, method: str):

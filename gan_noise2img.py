@@ -26,6 +26,9 @@ def build_model(args: argparse.Namespace):
         y_encoder = partial(nn.Linear, bias=False)
         img_channels = 3
 
+    else:
+        img_channels = 3
+
     kwargs = dict(img_size=args.img_size, img_channels=img_channels)
 
     if args.base_depth is not None:
@@ -78,64 +81,44 @@ def build_dataset(name: str, img_size: int):
         ds = TD.CelebA("data", split="all", transform=transform, target_transform=lambda x: x / x.sum())
 
     else:
-        raise ValueError(f"Dataset {name} is not supported")
+        transform = TT.Compose([TT.Resize(img_size), TT.CenterCrop(img_size), TT.ToTensor(), TT.Normalize(0.5, 0.5)])
+        ds = TD.ImageFolder(name, transform=transform)
 
     return ds
 
 
 class Noise2ImgTrainer(BaseTrainer):
+    def __init__(self, config, dis, gen, fixed_z, fixed_y):
+        super().__init__(config, dis, gen)
+        self.fixed_z = fixed_z.to(self.accelerator.device)
+        self.fixed_y = fixed_y.to(self.accelerator.device)
+
     def _forward(self, m: nn.Module, xs: Tensor, ys: Optional[Tensor]) -> Tensor:
         return m(xs, ys) if self.config.conditional else m(xs)
 
-    def train(self, dloader: DataLoader, n_steps: int):
+    def train_step(self, x_reals, ys):
         cfg = self.config
-        dloader = self.accelerator.prepare(dloader)
+        if cfg.channels_last:
+            x_reals = x_reals.to(memory_format=torch.channels_last)
+            if ys.dim() == 4:
+                ys = ys.to(torch.channels_last)
 
-        total_steps = self.counter + n_steps
-        pbar = tqdm(
-            cycle(dloader),
-            total=total_steps,
-            initial=self.counter,
-            leave=False,
-            dynamic_ncols=True,
-            disable=not self.accelerator.is_main_process,
-        )
+        if self.counter % cfg.log_img_interval == 0 and self.accelerator.is_main_process:
+            with torch.inference_mode(), self.g_ema.swap_state_dict(self.gen):
+                x_fakes = self._forward(self.gen, self.fixed_z, self.fixed_y)
+            log_images(self.accelerator, x_fakes, "generated", self.counter)
 
-        for x_reals, ys in pbar:
-            if cfg.channels_last:
-                x_reals = x_reals.to(memory_format=torch.channels_last)
-                if ys.dim() == 4:
-                    ys = ys.to(torch.channels_last)
+        log_dict = dict()
+        log_dict["loss/d"] = self.train_d_step(x_reals, ys).item()
 
-            if self.counter % cfg.log_img_interval == 0 and self.accelerator.is_main_process:
-                with torch.inference_mode(), self.g_ema.swap_state_dict(self.gen):
-                    x_fakes = self._forward(self.gen, self.fixed_z, self.fixed_y)
-                log_images(self.accelerator, x_fakes, "generated", self.counter)
+        if self.counter % cfg.train_g_interval == 0:
+            log_dict["loss/g"] = self.train_g_step(x_reals, ys).item()
+            self.g_ema.update(self.gen)
 
-            log_dict = dict()
-            log_dict["loss/d"] = self.train_d_step(x_reals, ys).item()
-
-            if self.counter % cfg.train_g_interval == 0:
-                log_dict["loss/g"] = self.train_g_step(x_reals, ys).item()
-                self.g_ema.update(self.gen)
-
-            # loss values are associated with models before the optimizer step
-            # therefore, increment `step` after logging
-            if self.counter % cfg.log_interval == 0:
-                self.accelerator.log(log_dict, step=self.counter)
-
-            self.counter += 1
-
-            if self.counter % cfg.checkpoint_interval == 0:
-                self.accelerator.save_state(f"{cfg.checkpoint_path}/step_{self.counter:07d}")
-
-            for m in (self.dis, self.gen):
-                m = m.module if self.accelerator.state.distributed_type == "MULTI_GPU" else m
-                if hasattr(m, "step"):
-                    m.step()
-
-            if self.counter >= total_steps:
-                break
+        for m in (self.dis, self.gen):
+            m = m.module if self.accelerator.state.distributed_type == "MULTI_GPU" else m
+            if hasattr(m, "step"):
+                m.step()
 
     def train_d_step(self, x_reals: Tensor, ys: Optional[Tensor]):
         bsize = x_reals.shape[0]
