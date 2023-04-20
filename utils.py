@@ -2,8 +2,6 @@ import argparse
 import inspect
 from typing import Literal, Union, get_args, get_origin
 
-from training import GANTrainerConfig
-
 
 def add_args_from_cls(parser: argparse.ArgumentParser, cls):
     for k, v in inspect.signature(cls).parameters.items():
@@ -40,18 +38,3 @@ def add_args_from_cls(parser: argparse.ArgumentParser, cls):
 def cls_from_args(args: argparse.Namespace, cls):
     kwargs = {k: getattr(args, k) for k in inspect.signature(cls).parameters.keys()}
     return cls(**kwargs)
-
-
-def get_parser():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--model", default="dcgan")
-    parser.add_argument("--base_depth", type=int)
-    parser.add_argument("--batch_size", type=int, default=32)
-    parser.add_argument("--num_workers", type=int, default=8)
-    parser.add_argument("--n_steps", type=int, default=10_000)
-    parser.add_argument("--img_size", type=int, default=64)
-    parser.add_argument("--n_log_imgs", type=int, default=40)
-    parser.add_argument("--progressive_growing", action="store_true")
-    parser.add_argument("--fade_duration", type=int)
-    add_args_from_cls(parser, GANTrainerConfig)
-    return parser

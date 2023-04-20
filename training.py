@@ -2,15 +2,13 @@ import contextlib
 import copy
 import datetime
 from dataclasses import dataclass, field
-from typing import Any, List, Literal, Optional
+from typing import Any, Literal, Optional
 
 import torch
 import torch.nn.functional as F
 from accelerate import Accelerator, DistributedDataParallelKwargs
 from accelerate.state import AcceleratorState
 from torch import Tensor, nn
-from torch.utils.data import DataLoader
-from tqdm import tqdm
 
 
 def cuda_speed_up():
@@ -43,14 +41,13 @@ def cycle(iterable):
 
 
 @dataclass
-class GANTrainerConfig:
+class BaseTrainerConfig:
     conditional: bool = False
     img2img: bool = False
     z_dim: int = 128
     method: Literal["gan", "wgan", "wgan-gp", "hinge"] = "gan"
     spectral_norm_d: bool = False
     spectral_norm_g: bool = False
-    label_smoothing: float = 0.0
     wgan_clip: float = 0.01
     wgan_gp_lamb: float = 10.0
     drift_penalty: float = 0.0
@@ -70,7 +67,7 @@ class GANTrainerConfig:
     checkpoint_interval: int = 10_000
     checkpoint_path: str = "checkpoints"
     resume_from_checkpoint: Optional[str] = None
-    loggers: List[str] = field(default_factory=list)
+    loggers: list[str] = field(default_factory=list)
     log_name: str = "gan"
     log_interval: int = 50
     log_img_interval: int = 1_000
@@ -78,8 +75,8 @@ class GANTrainerConfig:
     channels_last: bool = False
 
 
-class GANTrainer:
-    def __init__(self, config: GANTrainerConfig, D: nn.Module, G: nn.Module, fixed_z: Tensor, fixed_y: Tensor):
+class BaseTrainer:
+    def __init__(self, config: BaseTrainerConfig, dis: nn.Module, gen: nn.Module, fixed_z: Tensor, fixed_y: Tensor):
         assert config.wgan_clip > 0
         config = copy.deepcopy(config)
         config.lr_d = config.lr_d or config.lr
@@ -97,165 +94,46 @@ class GANTrainer:
         rank_zero = accelerator.is_main_process
         config.ema_device = config.ema_device or str(accelerator.device)
 
-        if config.spectral_norm_d:
-            apply_spectral_normalization(D)
-
-        if config.spectral_norm_g:
-            apply_spectral_normalization(G)
-
-        # spectral norm and Accelerate's fp32 wrapper will throw error to copy.deepcopy
-        G_ema = EMA(G, config.ema_decay, device=accelerator.device, enable=config.ema and rank_zero)
-        if config.ema and rank_zero:
-            accelerator.register_for_checkpointing(G_ema)
-
         if accelerator.distributed_type == "MULTI_GPU":
-            D.apply(disable_bn_running_stats)
-            G.apply(disable_bn_running_stats)
+            dis.apply(disable_bn_running_stats)
+            gen.apply(disable_bn_running_stats)
 
         if config.channels_last:
-            D = D.to(memory_format=torch.channels_last)
-            G = G.to(memory_format=torch.channels_last)
+            dis = dis.to(memory_format=torch.channels_last)
+            gen = gen.to(memory_format=torch.channels_last)
 
-        optim_d, optim_g = build_optimizers(config, D, G)
-        D, G, optim_d, optim_g = accelerator.prepare(D, G, optim_d, optim_g)
+        if config.spectral_norm_d:
+            apply_spectral_normalization(dis)
+
+        if config.spectral_norm_g:
+            apply_spectral_normalization(gen)
+
+        g_ema = EMA(gen, config.ema_decay, device=accelerator.device, enable=config.ema and rank_zero)
+        if config.ema and rank_zero:
+            accelerator.register_for_checkpointing(g_ema)
+
+        optim_d, optim_g = build_optimizers(config, dis, gen)
+        dis, gen, optim_d, optim_g = accelerator.prepare(dis, gen, optim_d, optim_g)
 
         if config.resume_from_checkpoint is not None:
             accelerator.load_state(config.resume_from_checkpoint)
 
         _config = {k: str(v) if not isinstance(v, (int, float, bool, str)) else v for k, v in vars(config).items()}
         accelerator.init_trackers(config.log_name, config=_config)
-        accelerator.print(config, AcceleratorState(), D, G, optim_d, optim_g, sep="\n")
-        accelerator.print(f"D: {count_params(D)/1e6:.2f}M params")
-        accelerator.print(f"G: {count_params(G)/1e6:.2f}M params")
+        accelerator.print(config, AcceleratorState(), dis, gen, optim_d, optim_g, sep="\n")
+        accelerator.print(f"D: {count_params(dis)/1e6:.2f}M params")
+        accelerator.print(f"G: {count_params(gen)/1e6:.2f}M params")
 
         self.config = config
         self.accelerator = accelerator
-        self.D = D
-        self.G = G
-        self.G_ema = G_ema
+        self.dis = dis
+        self.gen = gen
+        self.g_ema = g_ema
         self.optim_d = optim_d
         self.optim_g = optim_g
         self.fixed_z = fixed_z.to(accelerator.device)
         self.fixed_y = fixed_y.to(accelerator.device)
         self.counter = 0
-
-    def _forward(self, m: nn.Module, xs: Tensor, ys: Optional[Tensor]) -> Tensor:
-        return m(xs, ys) if self.config.conditional else m(xs)
-
-    def train(self, dloader: DataLoader, n_steps: int):
-        cfg = self.config
-        dloader = self.accelerator.prepare(dloader)
-
-        total_steps = self.counter + n_steps
-        pbar = tqdm(
-            cycle(dloader),
-            total=total_steps,
-            initial=self.counter,
-            leave=False,
-            dynamic_ncols=True,
-            disable=not self.accelerator.is_main_process,
-        )
-
-        for x_reals, ys in pbar:
-            if cfg.channels_last:
-                x_reals = x_reals.to(memory_format=torch.channels_last)
-                if ys.dim() == 4:
-                    ys = ys.to(torch.channels_last)
-
-            if self.counter % cfg.log_img_interval == 0 and self.accelerator.is_main_process:
-                with torch.inference_mode(), self.G_ema.swap_state_dict(self.G):
-                    x_fakes = self._forward(self.G, self.fixed_z, self.fixed_y)
-                log_images(self.accelerator, x_fakes, "generated", self.counter)
-
-            log_dict: dict[str, Any] = dict()
-            log_dict["loss/d"] = self.train_D_step(x_reals, ys).item()
-
-            if self.counter % cfg.train_g_interval == 0:
-                log_dict["loss/g"] = self.train_G_step(x_reals, ys).item()
-                self.G_ema.update(self.G)
-
-            # loss values are associated with models before the optimizer step
-            # therefore, increment `step` after logging
-            if self.counter % cfg.log_interval == 0:
-                self.accelerator.log(log_dict, step=self.counter)
-
-            self.counter += 1
-
-            if self.counter % cfg.checkpoint_interval == 0:
-                self.accelerator.save_state(f"{cfg.checkpoint_path}/step_{self.counter:07d}")
-
-            for m in (self.D, self.G):
-                m = m.module if self.accelerator.state.distributed_type == "MULTI_GPU" else m
-                if hasattr(m, "step"):
-                    m.step()
-
-            if self.counter >= total_steps:
-                break
-
-    def train_D_step(self, x_reals: Tensor, ys: Optional[Tensor]):
-        bsize = x_reals.shape[0]
-        cfg = self.config
-
-        # Algorithm 1 in paper clip weights after optimizer step, but GitHub code clip before optimizer step
-        # it shouldn't matter much in practice
-        if cfg.method == "wgan":
-            with torch.no_grad():
-                for param in self.D.parameters():
-                    param.clip_(-cfg.wgan_clip, cfg.wgan_clip)
-
-        with torch.no_grad():
-            z_noise = torch.randn(bsize, cfg.z_dim, device=self.accelerator.device)
-            x_fakes = self._forward(self.G, z_noise, ys)
-
-        if cfg.r1_penalty > 0 and self.counter % cfg.r1_penalty_interval == 0:
-            x_reals.requires_grad_()
-
-        d_reals = self._forward(self.D, x_reals, ys)
-        d_fakes = self._forward(self.D, x_fakes, ys)
-
-        loss_d = compute_d_loss(d_reals, d_fakes, cfg.method)
-
-        if cfg.method == "wgan-gp":
-            alpha = torch.rand(bsize, 1, 1, 1, device=x_reals.device)
-            x_inters = x_reals.detach().lerp(x_fakes.detach(), alpha).requires_grad_()
-            d_inters = self._forward(self.D, x_inters, ys)
-
-            (d_grad,) = torch.autograd.grad(d_inters.sum(), x_inters, create_graph=True)
-            d_grad_norm = torch.linalg.vector_norm(d_grad, dim=(1, 2, 3))
-            loss_d = loss_d + cfg.wgan_gp_lamb * (d_grad_norm - 1).square().mean()
-
-        # for Progressive GAN only
-        if cfg.drift_penalty > 0:
-            loss_d = loss_d + d_reals.square().mean() * cfg.drift_penalty
-
-        # https://arxiv.org/abs/1801.04406, for StyleGAN and StyleGAN2
-        if cfg.r1_penalty > 0 and self.counter % cfg.r1_penalty_interval == 0:
-            (d_grad,) = torch.autograd.grad(d_reals.sum(), x_reals, create_graph=True)
-            d_grad_norm2 = d_grad.square().sum() / bsize
-            loss_d = loss_d + d_grad_norm2 * cfg.r1_penalty / 2
-
-        self.optim_d.zero_grad(set_to_none=True)
-        self.accelerator.backward(loss_d)
-        self.optim_d.step()
-
-        return loss_d
-
-    def train_G_step(self, x_reals: Tensor, ys: Optional[Tensor]):
-        bsize = x_reals.shape[0]
-        cfg = self.config
-        self.D.requires_grad_(False)
-
-        z_noise = torch.randn(bsize, cfg.z_dim, device=self.accelerator.device)
-        x_fakes = self._forward(self.G, z_noise, ys)
-        d_fakes = self._forward(self.D, x_fakes, ys)
-
-        loss_g = compute_g_loss(d_fakes, cfg.method)
-        self.optim_g.zero_grad(set_to_none=True)
-        self.accelerator.backward(loss_g)
-        self.optim_g.step()
-
-        self.D.requires_grad_(True)
-        return loss_g
 
 
 def compute_g_loss(d_fakes: Tensor, method: str):
@@ -276,9 +154,7 @@ def compute_g_loss(d_fakes: Tensor, method: str):
 
 def compute_d_loss(d_reals: Tensor, d_fakes: Tensor, method: str):
     if method == "gan":
-        loss_d_real = -F.logsigmoid(d_reals).mean() * (1.0 - cfg.label_smoothing)
-        loss_d_fake = -F.logsigmoid(-d_fakes).mean()
-        loss_d = loss_d_real + loss_d_fake
+        loss_d = -F.logsigmoid(d_reals).mean() - F.logsigmoid(-d_fakes).mean()
 
     elif method in ("wgan", "wgan-gp"):
         loss_d = d_fakes.mean() - d_reals.mean()
@@ -295,12 +171,12 @@ def compute_d_loss(d_reals: Tensor, d_fakes: Tensor, method: str):
     return loss_d
 
 
-def build_optimizers(config: GANTrainerConfig, dis: nn.Module, gen: nn.Module):
-    optim_cls = getattr(torch.optim, config.optimizer)
-    kwargs: dict[str, Any] = dict(weight_decay=config.weight_decay)
+def build_optimizers(config: BaseTrainerConfig, dis: nn.Module, gen: nn.Module):
+    kwargs = dict(weight_decay=config.weight_decay)
     if config.optimizer in ("Adam", "AdamW"):
         kwargs.update(betas=(config.beta1, config.beta2))
 
+    optim_cls = getattr(torch.optim, config.optimizer)
     optim_d = optim_cls(dis.parameters(), lr=config.lr_d, **kwargs)
 
     # stylegan

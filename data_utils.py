@@ -15,7 +15,7 @@ class TorchStringArray:
         self.index = torch.from_numpy(self.index)
 
     def __getitem__(self, idx: int) -> str:
-        return str(memoryview(self.data[self.index[idx] : self.index[idx + 1]].numpy()), "utf-8")
+        return str(self.data[self.index[idx] : self.index[idx + 1]].numpy(), "utf-8")
 
     def __len__(self) -> int:
         return self.index.shape[0] - 1
