@@ -1,8 +1,10 @@
 import argparse
 import os
+from dataclasses import dataclass
 
 import torch
-from torch import Tensor
+import torch.nn.functional as F
+from torch import Tensor, nn
 from torch.utils.data import DataLoader, Dataset
 from torchvision.io import read_image
 
@@ -31,17 +33,27 @@ class Pix2PixDataset(Dataset):
         return len(self.files)
 
 
+@dataclass
+class Img2ImgTrainerConfig(BaseTrainerConfig):
+    swap_AB: bool = False
+    l1_reg: float = 100.0
+
+
 class Img2ImgTrainer(BaseTrainer):
-    def __init__(self, config, dis, gen, fixed_imgs_A):
+    def __init__(self, config: Img2ImgTrainerConfig, dis: nn.Module, gen: nn.Module, fixed_imgs_A: Tensor):
         super().__init__(config, dis, gen)
         self.fixed_imgs_A = fixed_imgs_A.to(self.accelerator.device)
 
-    def train_step(self, imgs_A, imgs_B):
-        if self.config.channels_last:
+    def train_step(self, imgs_A: Tensor, imgs_B: Tensor):
+        cfg = self.config
+        if cfg.swap_AB:
+            imgs_A, imgs_B = imgs_B, imgs_A
+
+        if cfg.channels_last:
             imgs_A = imgs_A.to(memory_format=torch.channels_last)
             imgs_B = imgs_B.to(memory_format=torch.channels_last)
 
-        if self.counter % self.config.log_img_interval == 0 and self.accelerator.is_main_process:
+        if self.counter % cfg.log_img_interval == 0 and self.accelerator.is_main_process:
             with torch.inference_mode(), self.g_ema.swap_state_dict(self.gen):
                 fake_imgs_B = self.gen(self.fixed_imgs_A)
             log_images(self.accelerator, fake_imgs_B, "generated", self.counter)
@@ -49,10 +61,9 @@ class Img2ImgTrainer(BaseTrainer):
         with torch.no_grad():
             fake_imgs_B = self.gen(imgs_A)
 
-        self.dis.requires_grad_(True)
         d_reals = self.dis(imgs_A, imgs_B)
         d_fakes = self.dis(imgs_A, fake_imgs_B)
-        loss_d = compute_d_loss(d_reals, d_fakes, "gan") * 0.5
+        loss_d = compute_d_loss(d_reals, d_fakes, cfg.method)
 
         self.optim_d.zero_grad(set_to_none=True)
         self.accelerator.backward(loss_d)
@@ -61,7 +72,8 @@ class Img2ImgTrainer(BaseTrainer):
         self.dis.requires_grad_(False)
         fake_imgs_B = self.gen(imgs_A)
         d_fakes = self.dis(imgs_A, fake_imgs_B)
-        loss_g = compute_g_loss(d_fakes, "gan")
+        loss_g = compute_g_loss(d_fakes, cfg.method) + F.l1_loss(fake_imgs_B, imgs_B) * cfg.l1_reg
+        self.dis.requires_grad_(True)
 
         self.optim_g.zero_grad(set_to_none=True)
         self.accelerator.backward(loss_g)
@@ -73,13 +85,11 @@ class Img2ImgTrainer(BaseTrainer):
 def get_parser():
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", default="pix2pix", choices=["pix2pix", "cyclegan"])
-    parser.add_argument("--base_depth", type=int)
     parser.add_argument("--dataset", choices=["edges2shoes", "facades", "maps", "night2day"])
     parser.add_argument("--batch_size", type=int, default=32)
     parser.add_argument("--num_workers", type=int, default=8)
     parser.add_argument("--n_steps", type=int, default=10_000)
-    parser.add_argument("--n_log_imgs", type=int, default=40)
-    add_args_from_cls(parser, BaseTrainerConfig)
+    add_args_from_cls(parser, Img2ImgTrainerConfig)
     return parser
 
 
@@ -89,6 +99,7 @@ def main():
 
     data_dir = f"../datasets/{args.dataset}/train"
     ds = Pix2PixDataset(data_dir)
+    print(f"Image shape: {ds[0][0].shape}")
 
     dloader = DataLoader(
         ds,
@@ -98,13 +109,12 @@ def main():
         pin_memory=True,
         drop_last=True,
     )
+    imgs_A, imgs_B = next(iter(dloader))
 
     dis = PatchGAN()
     gen = UnetGenerator() if args.model == "pix2pix" else ResNetGenerator()
 
-    imgs_A, imgs_B = next(iter(dloader))
-
-    config = cls_from_args(args, BaseTrainerConfig)
+    config = cls_from_args(args, Img2ImgTrainerConfig)
     trainer = Img2ImgTrainer(config, dis, gen, imgs_A)
     log_images(trainer.accelerator, imgs_A, "img/A", 0)
     log_images(trainer.accelerator, imgs_B, "img/B", 0)

@@ -61,7 +61,7 @@ class BaseTrainerConfig:
     lr_d: Optional[float] = None
     lr_g: Optional[float] = None
     weight_decay: float = 0
-    beta1: float = 0.5
+    beta1: float = 0.9
     beta2: float = 0.999
     ema: bool = False
     ema_decay: float = 0.999
@@ -74,6 +74,7 @@ class BaseTrainerConfig:
     log_interval: int = 50
     log_img_interval: int = 1_000
     find_unused_parameters: bool = False
+    mixed_precision: str = "no"
     channels_last: bool = False
 
 
@@ -92,6 +93,7 @@ class BaseTrainer:
             log_with=config.loggers,
             project_dir="logs",
             kwargs_handlers=[DistributedDataParallelKwargs(find_unused_parameters=config.find_unused_parameters)],
+            mixed_precision=config.mixed_precision,
         )
         rank_zero = accelerator.is_main_process
         config.ema_device = config.ema_device or str(accelerator.device)
@@ -158,6 +160,9 @@ class BaseTrainer:
             # therefore, increment `step` after logging
             if self.counter % cfg.log_interval == 0:
                 self.accelerator.log(log_dict, step=self.counter)
+
+            if "loss/g" in log_dict:
+                self.g_ema.update(self.gen)
 
             self.counter += 1
 

@@ -113,7 +113,6 @@ class Noise2ImgTrainer(BaseTrainer):
 
         if self.counter % cfg.train_g_interval == 0:
             log_dict["loss/g"] = self.train_g_step(x_reals, ys).item()
-            self.g_ema.update(self.gen)
 
         for m in (self.dis, self.gen):
             m = m.module if self.accelerator.state.distributed_type == "MULTI_GPU" else m
