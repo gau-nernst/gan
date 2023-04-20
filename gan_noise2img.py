@@ -120,6 +120,8 @@ class Noise2ImgTrainer(BaseTrainer):
             if hasattr(m, "step"):
                 m.step()
 
+        return log_dict
+
     def train_d_step(self, x_reals: Tensor, ys: Optional[Tensor]):
         bsize = x_reals.shape[0]
         cfg = self.config

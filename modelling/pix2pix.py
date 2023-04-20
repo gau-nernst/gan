@@ -7,6 +7,7 @@ import torch
 from torch import Tensor, nn
 
 from .base import _Act, _Norm, conv_norm_act, leaky_relu, relu
+from .dcgan import init_weights
 
 
 class PatchGAN(nn.Module):
@@ -35,8 +36,8 @@ class PatchGAN(nn.Module):
         self.layers.append(conv_norm_act(get_out_c(n_layers - 1), get_out_c(n_layers), conv4x4, norm, act))
         self.layers.append(conv4x4(get_out_c(n_layers), 1))
 
-    def forward(self, imgs: Tensor, ys: Tensor):
-        return self.layers(torch.cat([imgs, ys], dim=1))
+    def forward(self, imgs_A: Tensor, imgs_B: Tensor):
+        return self.layers(torch.cat([imgs_A, imgs_B], dim=1))
 
 
 class UnetGenerator(nn.Module):
@@ -83,6 +84,11 @@ class UnetGenerator(nn.Module):
             self.ups.append(act_conv_norm(get_out_c(i) * 2, get_out_c(i - 1), False))
             self.ups[-1].append(nn.Dropout(dropout))
         self.ups.append(nn.Sequential(up_act(), up_conv(get_out_c(0) * 2, B_channels), nn.Tanh()))
+
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        self.apply(init_weights)
 
     def forward(self, imgs: Tensor):
         fmaps = []
