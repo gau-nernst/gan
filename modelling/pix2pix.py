@@ -47,14 +47,14 @@ class UnetGenerator(nn.Module):
         B_channels: int = 3,
         n_stages: int = 7,
         base_channels: int = 64,
-        dropout: float = 0.5,
+        dropout: float = 0.0,
         norm: _Norm = nn.InstanceNorm2d,
         down_act: _Act = leaky_relu,
         up_act: _Act = relu,
     ):
         super().__init__()
-        down_conv = partial(nn.Conv2d, kernel_size=4, stride=2, padding=1)
-        up_conv = partial(nn.ConvTranspose2d, kernel_size=4, stride=2, padding=1)
+        down_conv4x4 = partial(nn.Conv2d, kernel_size=4, stride=2, padding=1)
+        up_conv4x4 = partial(nn.ConvTranspose2d, kernel_size=4, stride=2, padding=1)
 
         def get_out_c(idx: int):
             return base_channels * 2 ** min(idx, 3)
@@ -62,20 +62,20 @@ class UnetGenerator(nn.Module):
         def act_conv_norm(in_c: int, out_c: int, down: bool):
             return nn.Sequential(
                 (down_act if down else up_act)(),
-                (down_conv if down else up_conv)(in_c, out_c, bias=False),
+                (down_conv4x4 if down else up_conv4x4)(in_c, out_c, bias=False),
                 norm(out_c),
             )
 
         self.downs = nn.ModuleList()
-        self.downs.append(down_conv(A_channels, base_channels))
+        self.downs.append(down_conv4x4(A_channels, base_channels))
         for i in range(1, n_stages - 1):
             self.downs.append(act_conv_norm(get_out_c(i - 1), get_out_c(i), True))
 
         self.last_stage = nn.Sequential(
             down_act(),
-            down_conv(get_out_c(n_stages - 2), get_out_c(n_stages - 1)),
+            down_conv4x4(get_out_c(n_stages - 2), get_out_c(n_stages - 1)),
             up_act(),
-            up_conv(get_out_c(n_stages - 1), get_out_c(n_stages - 2), bias=False),
+            up_conv4x4(get_out_c(n_stages - 1), get_out_c(n_stages - 2), bias=False),
             norm(get_out_c(n_stages - 2)),
         )
 
@@ -83,7 +83,7 @@ class UnetGenerator(nn.Module):
         for i in range(n_stages - 2, 0, -1):
             self.ups.append(act_conv_norm(get_out_c(i) * 2, get_out_c(i - 1), False))
             self.ups[-1].append(nn.Dropout(dropout))
-        self.ups.append(nn.Sequential(up_act(), up_conv(get_out_c(0) * 2, B_channels), nn.Tanh()))
+        self.ups.append(nn.Sequential(up_act(), up_conv4x4(get_out_c(0) * 2, B_channels), nn.Tanh()))
 
         self.reset_parameters()
 
