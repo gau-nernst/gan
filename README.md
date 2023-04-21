@@ -2,32 +2,36 @@
 
 Features:
 
-- GAN losses and regularizations
-  - Original GAN loss (non-saturating version)
+- GAN losses:
+  - Original GAN loss (non-saturating)
   - WGAN and WGAN-GP
-  - SN-GAN
   - Hinge loss
-  - LSGAN
+  - Least square loss (LSGAN)
+- GAN regularization:
+  - WGAN: weight-clipping and gradient-penalty (WGAN-GP)
+  - Spectral norm (SN-GAN)
+  - R1 (StyleGAN, StyleGAN2)
+  - TODO: path length regularization (StyleGAN2)
 - Architectures
   - DCGAN
+  - Conditional GAN (modified for CNN)
   - NVIDIA GANs:
     - Progressive GAN
     - StyleGAN
-    - StyleGAN2 (may implement ADA version)
-    - Not implemented (yet): path length regularization
-  - Conditional GAN (modified for CNN)
+    - StyleGAN2
   - SA-GAN
+  - Pix2Pix / CycleGAN: PatchGAN discriminator, Unet and ResNet generator
 
 TODO:
 
+- StyleGAN2-ADA
 - AC-GAN
 - BigGAN
-- Pix2Pix / CycleGAN
 
 Goodies:
 
-- Mixed precision and distributed training is handled by [Accelerate](https://github.com/huggingface/accelerate)
-- Logging with Tensorboard (may add W&B in the future)
+- Mixed precision and distributed training is handled by [Accelerate](https://github.com/huggingface/accelerate) (distributed training is not regularly tested)
+- Logging with Tensorboard and W&B
 
 ## Usage
 
@@ -95,11 +99,11 @@ For other options, see `accelerate -h` or [here](https://huggingface.co/docs/acc
 
 ## Lessons
 
-Some lessons I have learned from implementing and training GANs:
+General
 
 - I could never get MLP-based GANs working. CNN-based GANs are much easier to train.
 - Use small batch size e.g. 32 (at least for original GAN. DCGAN paper used 128, WGAN paper used 64). Large batch size will make Discriminator much stronger than Generator. I haven't experimented batch size effect for WGAN, although theoretically WGAN should be able to be trained with large batch (since WGAN wants the best Discriminator given a Generator to estimate the correct Earth mover's distance). BigGAN uses large batch size (according to paper, haven't tested).
-- For transposed convolution, use `kernel_size=4` to avoid checkerboard artifacts (used by DCGAN).
+- For upsampling with transposed convolution (`stride=2`), use `kernel_size=4` to avoid checkerboard artifacts (used by DCGAN).
 - DCGAN's Discriminator does not use pooling at the output, but flatten and matmul to 1 output. This is implemented as convolution with kernel size = feature map size. The paper states it helps with convergence speed. For the Generator, DCGAN applies matmul to latent vector and reshape to (512,4,4). This is implemented as convolution transpose with kernel size = output feature map size i.e. 4. All kernel sizes are 4 in Discriminator and Generator.
 - Batch norm helps GANs converge much faster. Regarding which mode (training vs evaluation) Batch norm layer should be at different stages, it seems most implementations leave it in training mode during training.
   - For Discriminator, since it is only used in training, a reasonable choice is for Batch norm to always be in training mode (use current batch statistics).
@@ -107,21 +111,37 @@ Some lessons I have learned from implementing and training GANs:
   - I haven't explored other norm layers e.g. Layer norm, Instance norm, Adaptive Instance norm.
 - Training dynamics: GAN training depends on random seed, sometimes I can get better (or worse) results by repeating the same training. GAN training may become unstable / collapse after some time, so early stopping is required.
 - Generated images can get desaturated / washed-out after a while. It seems like this starts to happen when Discriminator loss becomes plateau. There doesn't seem any literature on this phenomenon.
-- WGAN and WGAN-GP:
-  - They are not always better than the original GAN loss, while requiring longer training.
-  - WGAN: it is necessary to train Discriminator more than Generator (so that Discriminator is a good EMD estimator given a fixed Generator), otherwise Discriminator may collapse `D(x) = D(G(z))`.
-- Optimizer: most GANs use Adam with low `beta1` (0.5 or 0.0). Some GANs (WGAN-GP, NVIDIA GANs) require `beta1=0` for stable training. WGAN uses RMSprop. I haven't experimented with other optimizers. SGD probably won't be able to optimize the minimax game. GANs also don't use weight decay.
-- Provide label information helps with GAN training. I didn't try modifying Discriminator to classify all classes + fake (suggested by [Salimans 2016](https://proceedings.neurips.cc/paper/2016/hash/8a3363abe792db2d8761d6403605aeb7-Abstract.html)), but Conditional GAN seems to speed up convergence. Conditional GAN probably prevents mode collapse also.
-- Progressive GAN:
-  - With fp16 mixed precision training, PixelNorm and MinibatchStdDev need to be computed in fp32 for numerical stability.
-  - Equalized learning rate helps with training stability. (I have tried not using Equalized LR and scaling LR accordingly but it didn't work. I still think Equalized LR is not necessary since no other networks need that. TODO: re-try again with full fp32 precision)
-  - I'm not sure if Discriminator output drift penalty is necessary
-  - Mini-batch standard deviation in Discriminator and beta1=0 seem to be important
-  - Tanh is not used in Generator (to force values in [-1,1])
-  - The author needed to use batch size 16 in order to fit training in GPU memory at 1024x1024 resolution. Having larger batch size is actually better, but hyperparameters need to be adjusted i.e. larger learning rate.
-- StyleGAN:
-  - Blurring (upfirdn2d) is quite problematic. Using grouped convolution implementation, the 2nd order gradient calculated by PyTorch is extremely slow. This can be fixed by overriding its backward pass (by subclassing `torch.autograd.Function`) with its forward pass (they are identical). WGAN-GP loss in Progressive GAN and R1 regularization in StyleGAN/StyleGAN2 both require 2nd order gradient.
-  - Most popular re-implementations like MMGeneration, rosinality, PyTorch-StudioGAN use NVIDIA's custom CUDA kernel (upfirdn2d, introduced in StyleGAN2). The custom kernel is around 1.7x faster (both forward and backward) than grouped convolution implementation at float32 precision (measured on RTX 3090). However, it doesn't support float16 precision. Thus, float16 grouped convolution implementation is faster float32 custom kernel (at least on RTX 3090).
-  - More benchmark info can be found at [#1](https://github.com/gau-nernst/gan/issues/1).
-- SA-GAN: Generator uses Conditional Batch Norm for conditional generation, which follows [Miyato 2018](https://arxiv.org/abs/1802.05637). BigGAN, which extends SA-GAN, does not change this aspect. There is no evidence yet, but I think Conditional / Adaptive Instance Norm should be better (StyleGAN's approach).
+- Optimizer: most GANs use Adam with low `beta1` (0.5 or 0.0). Some GANs (WGAN-GP, NVIDIA GANs) require `beta1=0` for stable training. WGAN uses RMSprop. No one really explains this, but it is probably due to GAN training being a mini-max game between the Discrminator and Generator. Smoothing the gradients does not make sense (since the loss is not "stationary"). GANs also don't use weight decay.
+- Provide label information helps with GAN training. It is probably beneficial for multi-modal distributions, thus learning a mapping from N-d Gaussian to data distribution is easier. There are several approaches to this:
+  - Conditional GAN (CGAN)
+  - Make Discriminator classify all classes + fake (suggested by [Salimans 2016](https://proceedings.neurips.cc/paper/2016/hash/8a3363abe792db2d8761d6403605aeb7-Abstract.html))
+  - AC-GAN
 - EMA of the Generator is extremely beneficial. Training DCGAN on CelebA, EMA reduces strange artifacts, makes the generated images smoother and more coherent. [Yazıc 2019](https://arxiv.org/abs/1806.04498) studies this effect. NVIDIA GANs (Progressive GAN, StyleGAN series) and BigGAN use EMA.
+
+WGAN and WGAN-GP:
+
+- They are not always better than the original GAN loss, while requiring longer training. Calculate 2nd order derivative is probably expensive.
+- It is necessary to train Discriminator more than Generator (so that Discriminator is a good EMD estimator given a fixed Generator), otherwise Discriminator may collapse `D(x) = D(G(z))`. Also, this leads to longer training.
+
+Progressive GAN:
+
+- With fp16 mixed precision training, PixelNorm and MinibatchStdDev need to be computed in fp32 for numerical stability. This can be done simply by calling `.float()` inside `.forward()` (no-op if input is already fp32).
+- Equalized learning rate helps with training stability. (I have tried not using Equalized LR and scaling LR accordingly but it didn't work. I still think Equalized LR is not necessary since no other networks need that.)
+- I'm not sure if Discriminator output drift penalty is necessary
+- Mini-batch standard deviation in Discriminator and beta1=0 seem to be important
+- Tanh is not used in Generator (to force values in [-1,1])
+- The author needed to use batch size 16 in order to fit training in GPU memory at 1024x1024 resolution. Having larger batch size is actually better, but hyperparameters need to be adjusted i.e. larger learning rate.
+
+StyleGAN:
+
+- Blurring (upfirdn2d) is quite problematic. Using grouped convolution implementation, the 2nd order gradient calculated by PyTorch is extremely slow. This can be fixed by overriding its backward pass (by subclassing `torch.autograd.Function`) with its forward pass (they are identical). WGAN-GP loss in Progressive GAN and R1 regularization in StyleGAN/StyleGAN2 both require 2nd order gradient.
+- Most popular re-implementations like MMGeneration, rosinality, PyTorch-StudioGAN use NVIDIA's custom CUDA kernel (upfirdn2d, introduced in StyleGAN2). The custom kernel is around 1.7x faster (both forward and backward) than grouped convolution implementation at float32 precision (measured on RTX 3090). However, it doesn't support float16 precision. Thus, float16 grouped convolution implementation is faster float32 custom kernel (at least on RTX 3090).
+- More benchmark info can be found at [#1](https://github.com/gau-nernst/gan/issues/1).
+
+SA-GAN:
+
+- Generator uses Conditional Batch Norm for conditional generation, which follows [Miyato 2018](https://arxiv.org/abs/1802.05637). BigGAN, which extends SA-GAN, does not change this aspect. There is no evidence yet, but I think Conditional / Adaptive Instance Norm should be better (StyleGAN's approach).
+
+Pix2Pix:
+
+- Removing dropout yields better generated images. With dropout, the images are noisy and have strange texture (Discriminator seems to collapse). Therefore, seeing Pix2Pix as conditional GAN is not quite right. It's directly learning a mapping from one domain to another, trained with GAN objective. Whether and why this works better than direct training with supervised objective is not clear to me.
