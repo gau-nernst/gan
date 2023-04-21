@@ -20,7 +20,9 @@ Features:
     - StyleGAN
     - StyleGAN2
   - SA-GAN
+- Img2Img:
   - Pix2Pix / CycleGAN: PatchGAN discriminator, Unet and ResNet generator
+  - TODO: Pix2PixHD, AnimeGAN
 
 TODO:
 
@@ -145,3 +147,4 @@ SA-GAN:
 Pix2Pix:
 
 - Removing dropout yields better generated images. With dropout, the images are noisy and have strange texture (Discriminator seems to collapse). Therefore, seeing Pix2Pix as conditional GAN is not quite right. It's directly learning a mapping from one domain to another, trained with GAN objective. Whether and why this works better than direct training with supervised objective is not clear to me.
+- Edges2shoes dataset: there are some anti-aliasing.

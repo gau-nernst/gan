@@ -47,7 +47,7 @@ class BaseTrainerConfig:
     conditional: bool = False
     img2img: bool = False
     z_dim: int = 128
-    method: Literal["gan", "wgan", "wgan-gp", "hinge"] = "gan"
+    method: Literal["gan", "wgan", "wgan-gp", "hinge", "lsgan"] = "gan"
     spectral_norm_d: bool = False
     spectral_norm_g: bool = False
     wgan_clip: float = 0.01
