@@ -31,7 +31,7 @@ class ResNetGenerator(nn.Sequential):
         base_channels: int = 64,
         n_blocks: int = 9,
         downsample: int = 2,
-        dropout: float = 0.5,
+        dropout: float = 0.0,
         norm: _Norm = nn.InstanceNorm2d,
         act: _Act = partial(nn.ReLU, inplace=True),
     ):
