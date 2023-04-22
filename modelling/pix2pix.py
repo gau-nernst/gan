@@ -47,7 +47,6 @@ class UnetGenerator(nn.Module):
         B_channels: int = 3,
         n_stages: int = 7,
         base_channels: int = 64,
-        dropout: float = 0.0,
         norm: _Norm = nn.InstanceNorm2d,
         down_act: _Act = leaky_relu,
         up_act: _Act = relu,
@@ -82,7 +81,6 @@ class UnetGenerator(nn.Module):
         self.ups = nn.ModuleList()
         for i in range(n_stages - 2, 0, -1):
             self.ups.append(act_conv_norm(get_out_c(i) * 2, get_out_c(i - 1), False))
-            self.ups[-1].append(nn.Dropout(dropout))
         self.ups.append(nn.Sequential(up_act(), up_conv4x4(get_out_c(0) * 2, B_channels), nn.Tanh()))
 
         self.reset_parameters()

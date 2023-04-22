@@ -145,7 +145,8 @@ def get_parser():
     parser.add_argument("--batch_size", type=int, default=32)
     parser.add_argument("--num_workers", type=int, default=8)
     parser.add_argument("--n_steps", type=int, default=10_000)
-    parser.add_argument("--n_log_imgs", type=int, default=40)
+    parser.add_argument("--n_log_imgs", type=int, default=16)
+    parser.add_argument("--compile", action="store_true")
     add_args_from_cls(parser, Img2ImgTrainerConfig)
     return parser
 
@@ -155,20 +156,24 @@ def main():
     args = parser.parse_args()
 
     if args.model == "pix2pix":
-        dis = nn.ModuleList([PatchGAN()])
-        gen = nn.ModuleList([UnetGenerator()])
+        dis = [PatchGAN()]
+        gen = [UnetGenerator()]
         train_ds = AlignedDataset(f"../datasets/{args.dataset}/train")
         val_ds = AlignedDataset(f"../datasets/{args.dataset}/val")
 
     elif args.model == "cyclegan":
         # this trick does not work with torch.compile()
-        dis = nn.ModuleList([PatchGAN(), PatchGAN()])
-        gen = nn.ModuleList([ResNetGenerator(), ResNetGenerator()])
+        dis = [PatchGAN(), PatchGAN()]
+        gen = [ResNetGenerator(), ResNetGenerator()]
         train_ds = UnalignedDataset(f"../datasets/{args.dataset}/trainA", f"../datasets/{args.dataset}/trainB")
         val_ds = UnalignedDataset(f"../datasets/{args.dataset}/testA", f"../datasets/{args.dataset}/testB")
 
     else:
         raise ValueError(f"Model {args.model} is not supported")
+
+    fn = torch.compile if args.compile else lambda x: x
+    dis = nn.ModuleList(fn(x) for x in dis)
+    gen = nn.ModuleList(fn(x) for x in gen)
 
     print(f"Image shape: {train_ds[0][0].shape}")
 

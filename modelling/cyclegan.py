@@ -11,11 +11,10 @@ from .dcgan import init_weights
 
 # almost identical to torchvision.models.resnet.BasicBlock
 class ResNetBlock(nn.Module):
-    def __init__(self, in_channels: int, out_channels: int, dropout: float, norm: _Norm, act: _Act):
+    def __init__(self, in_channels: int, out_channels: int, norm: _Norm, act: _Act):
         super().__init__()
         self.main = nn.Sequential(
             conv_norm_act(in_channels, out_channels, conv3x3, norm, act),
-            nn.Dropout(dropout),
             conv_norm_act(out_channels, out_channels, conv3x3, norm, nn.Identity),
         )
 
@@ -31,7 +30,6 @@ class ResNetGenerator(nn.Sequential):
         base_channels: int = 64,
         n_blocks: int = 9,
         downsample: int = 2,
-        dropout: float = 0.0,
         norm: _Norm = nn.InstanceNorm2d,
         act: _Act = partial(nn.ReLU, inplace=True),
     ):
@@ -46,7 +44,7 @@ class ResNetGenerator(nn.Sequential):
             base_channels *= 2
 
         for _ in range(n_blocks):
-            self.append(ResNetBlock(base_channels, base_channels, dropout, norm, act))
+            self.append(ResNetBlock(base_channels, base_channels, norm, act))
 
         for _ in range(downsample):
             self.append(conv_norm_act(base_channels, base_channels // 2, upconv3x3, norm, act))
