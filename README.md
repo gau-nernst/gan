@@ -22,6 +22,8 @@ Features:
   - SA-GAN
 - Img2Img:
   - Pix2Pix / CycleGAN: PatchGAN discriminator, Unet and ResNet generator
+    - Dropout not included. Batch norm is replaced with Instance norm.
+    - Not implemented: train Discrimiantor with past generated samples
   - TODO: Pix2PixHD, AnimeGAN
 
 TODO:
@@ -69,6 +71,18 @@ Progressive GAN
 
 ```bash
 python gan_celeba.py --model progressive_gan --loggers tensorboard --img_size 256 --z_dim 512 --batch_size 16 --method wgan-gp --log_name celeba_progressive_gan --n_steps 650000 --optimizer Adam --beta1 0 --beta2 0.99 --lr 1e-3 --ema --drift_penalty 0.001 --checkpoint_interval 50000
+```
+
+pix2pix (scaled up batch size and LR, enable EMA)
+
+```bash
+python gan_img2img.py --dataset edges2shoes --model pix2pix --loggers tensorboard --log_name pix2pix_edges2shoes --beta1 0.5 --beta2 0.999 --lr_d 1e-3 --lr_g 2e-3 --batch_size 40 --mixed_precision fp16 --checkpoint_interval 20_000 --n_steps 75_000 --ema --compile
+```
+
+CycleGAN
+
+```bash
+python gan_img2img.py --dataset horse2zebra --model cyclegan --method lsgan --loggers tensorboard --log_name cyclegan_horse2zebra --beta1 0.5 --beta2 0.999 --lr_d 1e-3 --lr_g 2e-3 --batch_size 10 --mixed_precision fp16 --checkpoint_interval 20_000 --n_steps 25_000 --ema --compile
 ```
 
 ### Usage with HF's Accelerate
