@@ -1,5 +1,4 @@
 import argparse
-import os
 from dataclasses import dataclass
 from typing import Literal
 
@@ -8,27 +7,11 @@ import torch
 import torch.nn.functional as F
 from torch import Tensor, nn
 from torch.utils.data import DataLoader, Dataset
-from torchvision.io import ImageReadMode, read_image
 
-from data_utils import TorchStringArray
+from datasets import ImageFolderDataset
 from modelling import PatchGAN, ResNetGenerator, UnetGenerator
 from training import BaseTrainer, BaseTrainerConfig, compute_d_loss, compute_g_loss, log_images
 from utils import add_args_from_cls, cls_from_args
-
-
-class ImageFolderDataset(Dataset):
-    def __init__(self, data_dir: str):
-        super().__init__()
-        self.data_dir = data_dir
-        files = os.listdir(self.data_dir)
-        files.sort()
-        self.files = TorchStringArray(files)
-
-    def __getitem__(self, idx: int) -> Tensor:
-        return read_image(os.path.join(self.data_dir, self.files[idx]), mode=ImageReadMode.RGB) / 127.5 - 1
-
-    def __len__(self) -> int:
-        return len(self.files)
 
 
 # http://efrosgans.eecs.berkeley.edu/pix2pix/datasets/
