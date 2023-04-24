@@ -36,6 +36,17 @@ class UnalignedDataset(Dataset):
         return len(self.ds_A)
 
 
+class SuperResolutionDataset(ImageFolderDataset):
+    def __init__(self, data_dir: str, downsample: int = 4):
+        super().__init__(data_dir)
+        self.scale = 1 / downsample
+
+    def __getitem__(self, idx: int) -> tuple[Tensor, Tensor]:
+        hr = super().__getitem__(idx)
+        lr = F.interpolate(hr[None], scale_factor=self.scale, mode="bilinear", antialias=True)[0]
+        return lr, hr
+
+
 @dataclass
 class Img2ImgTrainerConfig(BaseTrainerConfig):
     model: Literal["pix2pix", "cyclegan"] = "pix2pix"
