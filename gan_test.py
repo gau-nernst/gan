@@ -102,9 +102,26 @@ def test_progressive_gan_generator():
         gen.grow()
 
 
-@pytest.mark.parametrize("kernel_size", (3, 4))
-@pytest.mark.parametrize("up", (1, 2))
+@pytest.mark.parametrize("up_down", ((1, 1), (1, 2), (2, 1)))
+@pytest.mark.parametrize("kx", (2, 3, 4))
+@pytest.mark.parametrize("ky", (2, 3, 4))
+def test_upfirdn2d_shape(ky, kx, up_down):
+    up, down = up_down
+    imgs = torch.randn(4, 16, 8, 8, requires_grad=True)
+    kernel = torch.randn(ky, kx)
+    px1 = (kx - 1) // 2
+    px2 = kx - px1
+    py1 = (ky - 1) // 2
+    py2 = ky - py1
+
+    out = upfirdn2d(imgs, kernel, up, down, px1, px2, py1, py2)
+    assert out.shape[:2] == imgs.shape[:2]
+    assert out.shape[2:] == (imgs.shape[2] * up // down, imgs.shape[3] * up // down)
+
+
 @pytest.mark.parametrize("down", (1, 2))
+@pytest.mark.parametrize("up", (1, 2))
+@pytest.mark.parametrize("kernel_size", (3, 4))
 def test_upfirdn2d_grad_fix(kernel_size, up, down):
     imgs = torch.randn(4, 16, 8, 8, requires_grad=True, dtype=torch.double)
     kernel = torch.randn(kernel_size, kernel_size, dtype=torch.double)
