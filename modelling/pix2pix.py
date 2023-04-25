@@ -1,3 +1,5 @@
+# pix2pix - https://arxiv.org/abs/1611.07004
+#
 # Code reference:
 # https://github.com/junyanz/pytorch-CycleGAN-and-pix2pix
 

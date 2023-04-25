@@ -1,3 +1,8 @@
+# SRGAN - https://arxiv.org/abs/1609.04802
+#
+# Interesting explanation why Pixel Shuffle is used:
+# https://arxiv.org/abs/1609.07009
+
 from functools import partial
 
 from torch import Tensor, nn
