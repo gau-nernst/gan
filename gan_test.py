@@ -3,54 +3,56 @@ import torch
 import torch.nn.functional as F
 
 import modelling
-from modelling import dcgan, progressive_gan, sagan, stylegan, stylegan2
+from modelling import get_discriminator_cls, get_generator_cls
 from modelling.nvidia_ops import Blur, UpFIRDn2d, upfirdn2d
 
 
 IMG_SIZE = 128
 IMG_CHANNELS = 3
 Z_DIM = 128
-BATCH_SIZE = 8
+BATCH_SIZE = 4
 IMG_SHAPE = (BATCH_SIZE, IMG_CHANNELS, IMG_SIZE, IMG_SIZE)
 NOISE_SHAPE = (BATCH_SIZE, Z_DIM)
 
-MODELS = (dcgan, progressive_gan, stylegan, stylegan2, sagan)
+NOISE2IMG_MODELS = ("dcgan", "progressive_gan", "stylegan", "stylegan2", "sagan")
 
 
-@pytest.mark.parametrize("cls", MODELS)
-def test_discriminator(cls):
-    D = cls.Discriminator(img_size=IMG_SIZE, img_channels=IMG_CHANNELS)
+@pytest.mark.parametrize("name", NOISE2IMG_MODELS)
+def test_noise2img_discriminator(name: str):
+    D = get_discriminator_cls(name)(img_size=IMG_SIZE, img_channels=IMG_CHANNELS)
     assert hasattr(D, "reset_parameters")
     out = D(torch.randn(IMG_SHAPE))
     assert out.shape == (BATCH_SIZE,)
     out.mean().backward()
 
 
-# @pytest.mark.parametrize("module", MODELS)
-# def test_discriminator_compile(module):
-#     D = module.Discriminator(img_size=IMG_SIZE, img_channels=IMG_CHANNELS)
-#     compiled_D = torch.compile(D)
+@pytest.mark.skip
+@pytest.mark.parametrize("name", NOISE2IMG_MODELS)
+def test_discriminator_compile(name):
+    D = get_discriminator_cls(name)(img_size=IMG_SIZE, img_channels=IMG_CHANNELS)
+    compiled_D = torch.compile(D)
 
-#     imgs = torch.randn(IMG_SHAPE)
-#     torch.testing.assert_close(D(imgs), compiled_D(imgs))
+    imgs = torch.randn(IMG_SHAPE)
+    torch.testing.assert_close(D(imgs), compiled_D(imgs))
 
 
-@pytest.mark.parametrize("cls", MODELS)
-def test_generator(cls):
-    G = cls.Generator(img_size=IMG_SIZE, img_channels=IMG_CHANNELS, z_dim=Z_DIM)
+@pytest.mark.parametrize("name", NOISE2IMG_MODELS)
+def test_noise2img_generator(name: str):
+    G = get_generator_cls(name)(img_size=IMG_SIZE, img_channels=IMG_CHANNELS, z_dim=Z_DIM)
     assert hasattr(G, "reset_parameters")
     out = G(torch.randn(NOISE_SHAPE))
     assert out.shape == IMG_SHAPE
     out.mean().backward()
 
 
-# @pytest.mark.parametrize("module", MODELS)
-# def test_generator_compile(module):
-#     G = module.Generator(img_size=IMG_SIZE, img_channels=IMG_CHANNELS, z_dim=Z_DIM)
-#     compiled_G = torch.compile(G)
+@pytest.mark.skip
+@pytest.mark.parametrize("name", NOISE2IMG_MODELS)
+def test_generator_compile(name):
+    G = get_generator_cls(name)(img_size=IMG_SIZE, img_channels=IMG_CHANNELS, z_dim=Z_DIM)
+    compiled_G = torch.compile(G)
 
-#     noise = torch.randn(NOISE_SHAPE)
-#     torch.testing.assert_close(G(noise), compiled_G(noise))
+    noise = torch.randn(NOISE_SHAPE)
+    torch.testing.assert_close(G(noise), compiled_G(noise))
 
 
 def test_patch_gan():
@@ -62,13 +64,13 @@ def test_patch_gan():
 @pytest.mark.parametrize("cls", (modelling.UnetGenerator, modelling.ResNetGenerator))
 def test_img2img_generator(cls):
     m = cls(IMG_CHANNELS, IMG_CHANNELS)
-    out = m(torch.randn(NOISE_SHAPE), torch.randn(IMG_SHAPE))
+    out = m(torch.randn(IMG_SHAPE))
     assert out.shape == IMG_SHAPE
 
 
 def test_progressive_gan_discriminator():
     size = 4
-    disc = progressive_gan.Discriminator(
+    disc = modelling.ProgressiveGANDiscriminator(
         img_size=IMG_SIZE,
         img_channels=IMG_CHANNELS,
         z_dim=Z_DIM,
@@ -86,7 +88,7 @@ def test_progressive_gan_discriminator():
 
 def test_progressive_gan_generator():
     size = 4
-    gen = progressive_gan.Generator(
+    gen = modelling.ProgressiveGANGenerator(
         img_size=IMG_SIZE,
         img_channels=IMG_CHANNELS,
         z_dim=Z_DIM,
