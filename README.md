@@ -24,7 +24,7 @@ Features:
   - Pix2Pix / CycleGAN: PatchGAN discriminator, Unet and ResNet generator
     - Dropout not included. Batch norm is replaced with Instance norm.
     - Not implemented: train Discrimiantor with past generated samples
-  - TODO: Pix2PixHD, AnimeGAN
+  - TODO: Pix2PixHD, AnimeGAN, SRGAN, ESRGAN
 
 TODO:
 
@@ -162,3 +162,7 @@ Pix2Pix:
 
 - Removing dropout yields better generated images. With dropout, the images are noisy and have strange texture (Discriminator seems to collapse). Therefore, seeing Pix2Pix as conditional GAN is not quite right. It's directly learning a mapping from one domain to another, trained with GAN objective. Whether and why this works better than direct training with supervised objective is not clear to me.
 - Edges2shoes dataset: there are some anti-aliasing.
+
+SRGAN:
+
+- Conv3x3 + Pixel shuffle is equivalent to ConvTranspose6x6. From my benchmarks, ConvTranspose is faster most of the time.

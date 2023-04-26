@@ -1,7 +1,8 @@
 # SRGAN - https://arxiv.org/abs/1609.04802
 #
-# Interesting explanation why Pixel Shuffle is used:
+# Original implementation uses Pixel Shuffle. It is equivalent to ConvTranspose
 # https://arxiv.org/abs/1609.07009
+# ConvTranspose is faster on CUDA most of the time. There is no reason to use Pixel Shuffle.
 
 from functools import partial
 
@@ -28,11 +29,11 @@ class SRGANGenerator(nn.Module):
         self.blocks = nn.Sequential()
         for _ in range(n_blocks):
             self.blocks.append(ResNetBlock(base_channels, base_channels, norm, act))
-        self.blocks.append(conv_norm_act(base_channels, base_channels, conv3x3, norm, nn.Identity))
+        self.blocks.append(nn.Sequential(conv3x3(base_channels, base_channels), norm()))
 
         self.output_layer = nn.Sequential()
         for _ in range(upsample):
-            self.output_layer.extend([conv3x3(base_channels, base_channels * 4), nn.PixelShuffle(2), act()])
+            self.output_layer.extend([nn.ConvTranspose2d(base_channels, base_channels, 6, 2, 2), act()])
         self.output_layer.append(conv9x9(base_channels, img_channels))
 
     def forward(self, imgs: Tensor):
@@ -52,12 +53,12 @@ class SRGANDiscriminator(nn.Sequential):
     ):
         super().__init__()
 
-        def get_n_filters(idx: int):
+        def get_nc(idx: int):
             return base_channels * 2 ** (idx // 2)
 
         self.extend([conv3x3(img_channels, base_channels), act()])
 
         for i in range(1, 8):
-            self.append(conv_norm_act(get_n_filters(i - 1), get_n_filters(i), conv3x3, norm, act, stride=i % 2 + 1))
+            self.append(conv_norm_act(get_nc(i - 1), get_nc(i), conv3x3, norm, act, stride=i % 2 + 1))
 
-        self.extend([conv1x1(get_n_filters(7), get_n_filters(8)), act(), conv1x1(get_n_filters(8), 1)])
+        self.extend([conv1x1(get_nc(7), get_nc(8)), act(), conv1x1(get_nc(8), 1)])
