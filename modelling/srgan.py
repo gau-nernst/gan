@@ -12,7 +12,7 @@ from .base import _Act, _Norm, conv1x1, conv3x3, conv_norm_act, leaky_relu
 from .cyclegan import ResNetBlock
 
 
-class SRGANGenerator(nn.Module):
+class SRResNet(nn.Module):
     def __init__(
         self,
         img_channels: int = 3,

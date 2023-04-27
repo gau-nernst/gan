@@ -2,6 +2,7 @@
 #
 # Code reference:
 # https://github.com/xinntao/ESRGAN
+# nearest-neighbour upsample + 3x3 conv is replaced with 4x4 conv transpose with stride=2
 
 import torch
 from torch import Tensor, nn
@@ -48,15 +49,17 @@ class ESRGANGenerator(nn.Module):
     ):
         super().__init__()
         self.input_layer = conv3x3(img_channels, base_channels)
+
         self.trunk = nn.Sequential(*[RRDBlock(base_channels) for _ in range(n_blocks)])
         self.trunk.append(conv3x3(base_channels, base_channels))
-        self.upsample = nn.Sequential()
+
+        self.output_layer = nn.Sequential()
         for _ in range(upsample):
-            self.upsample.extend([nn.ConvTranspose2d(base_channels, base_channels, 4, 2, 1), act()])
-        self.upsample.extend([conv3x3(base_channels, base_channels), act(), conv3x3(base_channels, img_channels)])
+            self.output_layer.extend([nn.ConvTranspose2d(base_channels, base_channels, 4, 2, 1), act()])
+        self.output_layer.extend([conv3x3(base_channels, base_channels), act(), conv3x3(base_channels, img_channels)])
 
     def forward(self, imgs: Tensor) -> Tensor:
         out = self.input_layer(imgs)
         out = out + self.trunk(out)
-        out = self.upsample(out)
+        out = self.output_layer(out)
         return out

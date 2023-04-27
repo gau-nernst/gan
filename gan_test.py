@@ -68,7 +68,7 @@ def test_img2img_generator(cls):
     assert out.shape == IMG_SHAPE
 
 
-@pytest.mark.parametrize("cls", (modelling.SRGANGenerator, modelling.ESRGANGenerator))
+@pytest.mark.parametrize("cls", (modelling.SRResNet, modelling.ESRGANGenerator))
 def test_img2img_sr_generator(cls):
     m = cls(IMG_CHANNELS)
     out = m(torch.randn(IMG_SHAPE))

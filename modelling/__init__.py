@@ -5,7 +5,7 @@ from .esrgan import ESRGANGenerator
 from .pix2pix import PatchGAN, UnetGenerator
 from .progressive_gan import ProgressiveGANDiscriminator, ProgressiveGANGenerator
 from .sagan import SAGANDiscriminator, SAGANGenerator
-from .srgan import SRGANDiscriminator, SRGANGenerator
+from .srgan import SRGANDiscriminator, SRResNet
 from .stylegan import StyleGANDiscriminator, StyleGANGenerator
 from .stylegan2 import StyleGAN2Discriminator, StyleGAN2Generator
 
@@ -20,7 +20,7 @@ def get_generator_cls(name: str):
         cgan=CGANGenerator,
         pix2pix=UnetGenerator,
         cyclegan=ResNetGenerator,
-        srgan=SRGANGenerator,
+        srgan=SRResNet,
         esrgan=ESRGANGenerator,
     )[name]
 
