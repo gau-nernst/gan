@@ -68,6 +68,13 @@ def test_img2img_generator(cls):
     assert out.shape == IMG_SHAPE
 
 
+@pytest.mark.parametrize("cls", (modelling.SRGANGenerator, modelling.ESRGANGenerator))
+def test_img2img_sr_generator(cls):
+    m = cls(IMG_CHANNELS)
+    out = m(torch.randn(IMG_SHAPE))
+    assert out.shape == IMG_SHAPE[:2] + (IMG_SHAPE[2] * 4, IMG_SHAPE[3] * 4)
+
+
 def test_progressive_gan_discriminator():
     size = 4
     disc = modelling.ProgressiveGANDiscriminator(
@@ -105,8 +112,8 @@ def test_progressive_gan_generator():
 
 
 @pytest.mark.parametrize("up_down", ((1, 1), (1, 2), (2, 1)))
-@pytest.mark.parametrize("kx", (2, 3, 4))
-@pytest.mark.parametrize("ky", (2, 3, 4))
+@pytest.mark.parametrize("kx", (2, 3, 4, 5))
+@pytest.mark.parametrize("ky", (2, 3, 4, 5))
 def test_upfirdn2d_shape(ky, kx, up_down):
     up, down = up_down
     imgs = torch.randn(4, 16, 8, 8)
@@ -123,7 +130,7 @@ def test_upfirdn2d_shape(ky, kx, up_down):
 
 @pytest.mark.parametrize("down", (1, 2))
 @pytest.mark.parametrize("up", (1, 2))
-@pytest.mark.parametrize("kernel_size", (3, 4))
+@pytest.mark.parametrize("kernel_size", (2, 3, 4, 5))
 def test_upfirdn2d_gradfix(kernel_size, up, down):
     imgs = torch.randn(4, 16, 8, 8, requires_grad=True, dtype=torch.double)
     kernel = torch.randn(kernel_size, kernel_size, dtype=torch.double)
