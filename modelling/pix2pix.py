@@ -42,6 +42,7 @@ class PatchGAN(nn.Module):
         return self.layers(torch.cat([imgs_A, imgs_B], dim=1))
 
 
+# official PyTorch code does not use learnable affine for Instance norm
 class UnetGenerator(nn.Module):
     def __init__(
         self,
