@@ -29,7 +29,7 @@ class SRGANGenerator(nn.Module):
         self.blocks = nn.Sequential()
         for _ in range(n_blocks):
             self.blocks.append(ResNetBlock(base_channels, base_channels, norm, act))
-        self.blocks.append(nn.Sequential(conv3x3(base_channels, base_channels), norm()))
+        self.blocks.append(conv_norm_act(base_channels, base_channels, conv3x3, norm, nn.Identity))
 
         self.output_layer = nn.Sequential()
         for _ in range(upsample):
