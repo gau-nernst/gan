@@ -8,10 +8,9 @@ import torchvision.datasets as TD
 import torchvision.transforms as TT
 from torch import Tensor, nn
 from torch.utils.data import DataLoader
-from tqdm import tqdm
 
 from modelling import get_discriminator_cls, get_generator_cls
-from training import BaseTrainer, BaseTrainerConfig, compute_d_loss, compute_g_loss, cycle, log_images
+from training import BaseTrainer, BaseTrainerConfig, compute_d_loss, compute_g_loss
 from utils import add_args_from_cls, cls_from_args
 
 
@@ -88,10 +87,10 @@ def build_dataset(name: str, img_size: int):
 
 
 class Noise2ImgTrainer(BaseTrainer):
-    def __init__(self, config, dis, gen, fixed_z, fixed_y):
+    def __init__(self, config, dis, gen, fixed_z: Tensor, fixed_y: Tensor):
         super().__init__(config, dis, gen)
-        self.fixed_z = fixed_z.to(self.accelerator.device)
-        self.fixed_y = fixed_y.to(self.accelerator.device)
+        self.fixed_z = fixed_z.to(self.config.device)
+        self.fixed_y = fixed_y.to(self.config.device)
 
     def _forward(self, m: nn.Module, xs: Tensor, ys: Optional[Tensor]) -> Tensor:
         return m(xs, ys) if self.config.conditional else m(xs)
@@ -100,22 +99,19 @@ class Noise2ImgTrainer(BaseTrainer):
         cfg = self.config
         if cfg.channels_last:
             x_reals = x_reals.to(memory_format=torch.channels_last)
-            if ys.dim() == 4:
-                ys = ys.to(torch.channels_last)
 
-        if self.counter % cfg.log_img_interval == 0 and self.accelerator.is_main_process:
-            with torch.inference_mode(), self.g_ema.swap_state_dict(self.gen):
+        if self.global_step % cfg.log_img_interval == 0:
+            with torch.inference_mode(), self.g_ema.swap_state_dict(self.gen), self.autocast():
                 x_fakes = self._forward(self.gen, self.fixed_z, self.fixed_y)
-            log_images(self.accelerator, x_fakes, "generated", self.counter)
+            self.log_images(x_fakes, "generated", self.global_step)
 
         log_dict = dict()
         log_dict["loss/d"] = self.train_d_step(x_reals, ys).item()
 
-        if self.counter % cfg.train_g_interval == 0:
+        if self.global_step % cfg.train_g_interval == 0:
             log_dict["loss/g"] = self.train_g_step(x_reals, ys).item()
 
         for m in (self.dis, self.gen):
-            m = m.module if self.accelerator.state.distributed_type == "MULTI_GPU" else m
             if hasattr(m, "step"):
                 m.step()
 
@@ -132,49 +128,48 @@ class Noise2ImgTrainer(BaseTrainer):
                 for param in self.dis.parameters():
                     param.clip_(-cfg.wgan_clip, cfg.wgan_clip)
 
-        with torch.no_grad():
-            z_noise = torch.randn(bsize, cfg.z_dim, device=self.accelerator.device)
-            x_fakes = self._forward(self.gen, z_noise, ys)
+        with self.autocast():
+            with torch.no_grad():
+                z_noise = torch.randn(bsize, cfg.z_dim, device=x_reals.device)
+                x_fakes = self._forward(self.gen, z_noise, ys)
 
-        if cfg.r1_penalty > 0 and self.counter % cfg.r1_penalty_interval == 0:
-            x_reals.requires_grad_()
+            # if cfg.r1_penalty > 0 and self.counter % cfg.r1_penalty_interval == 0:
+            #     x_reals.requires_grad_()
 
-        d_reals = self._forward(self.dis, x_reals, ys)
-        d_fakes = self._forward(self.dis, x_fakes, ys)
+            d_reals = self._forward(self.dis, x_reals, ys)
+            d_fakes = self._forward(self.dis, x_fakes, ys)
+            loss_d = compute_d_loss(d_reals, d_fakes, cfg.method)
 
-        loss_d = compute_d_loss(d_reals, d_fakes, cfg.method)
+            if cfg.method == "wgan-gp":
+                # https://pytorch.org/docs/stable/notes/amp_examples.html#gradient-penalty
+                alpha = torch.rand(bsize, 1, 1, 1, device=x_reals.device)
+                x_inters = x_reals.lerp(x_fakes.detach().float(), alpha).requires_grad_()
+                d_inters = self._forward(self.dis, x_inters, ys).sum()
 
-        if cfg.method == "wgan-gp":
-            # https://pytorch.org/docs/stable/notes/amp_examples.html#gradient-penalty
-            alpha = torch.rand(bsize, 1, 1, 1, device=x_reals.device)
-            x_inters = x_reals.detach().lerp(x_fakes.detach(), alpha).requires_grad_()
-            d_inters = self._forward(self.dis, x_inters, ys).sum()
+                with self.autocast(enabled=False):
+                    if self.scaler is not None:
+                        d_inters = self.scaler.scale(d_inters)
+                        scale = self.scaler.get_scale()
+                    else:
+                        scale = 1
 
-            if self.accelerator.scaler is not None:
-                d_inters = self.accelerator.scaler.scale(d_inters)
-                (d_grad,) = torch.autograd.grad(d_inters, x_inters, create_graph=True)
-                d_grad = d_grad / self.accelerator.scaler.get_scale()
+                    (d_grad,) = torch.autograd.grad(d_inters, x_inters, create_graph=True)
+                    d_grad = d_grad / scale
 
-            else:
-                (d_grad,) = torch.autograd.grad(d_inters, x_inters, create_graph=True)
-
-            with self.accelerator.autocast():
                 d_grad_norm = torch.linalg.vector_norm(d_grad, dim=(1, 2, 3))
                 loss_d = loss_d + cfg.wgan_gp_lamb * (d_grad_norm - 1).square().mean()
 
-        # for Progressive GAN only
-        if cfg.drift_penalty > 0:
-            loss_d = loss_d + d_reals.square().mean() * cfg.drift_penalty
+            # for Progressive GAN only
+            if cfg.drift_penalty > 0:
+                loss_d = loss_d + d_reals.square().mean() * cfg.drift_penalty
 
         # https://arxiv.org/abs/1801.04406, for StyleGAN and StyleGAN2
-        if cfg.r1_penalty > 0 and self.counter % cfg.r1_penalty_interval == 0:
-            (d_grad,) = torch.autograd.grad(d_reals.sum(), x_reals, create_graph=True)
-            d_grad_norm2 = d_grad.square().sum() / bsize
-            loss_d = loss_d + d_grad_norm2 * cfg.r1_penalty / 2
+        # if cfg.r1_penalty > 0 and self.counter % cfg.r1_penalty_interval == 0:
+        #     (d_grad,) = torch.autograd.grad(d_reals.sum(), x_reals, create_graph=True)
+        #     d_grad_norm2 = d_grad.square().sum() / bsize
+        #     loss_d = loss_d + d_grad_norm2 * cfg.r1_penalty / 2
 
-        self.optim_d.zero_grad(set_to_none=True)
-        self.accelerator.backward(loss_d)
-        self.optim_d.step()
+        self.step_optimizer(loss_d, self.optim_d)
 
         return loss_d
 
@@ -183,15 +178,13 @@ class Noise2ImgTrainer(BaseTrainer):
         cfg = self.config
         self.dis.requires_grad_(False)
 
-        z_noise = torch.randn(bsize, cfg.z_dim, device=self.accelerator.device)
-        x_fakes = self._forward(self.gen, z_noise, ys)
-        d_fakes = self._forward(self.dis, x_fakes, ys)
+        with self.autocast():
+            z_noise = torch.randn(bsize, cfg.z_dim, device=x_reals.device)
+            x_fakes = self._forward(self.gen, z_noise, ys)
+            d_fakes = self._forward(self.dis, x_fakes, ys)
+            loss_g = compute_g_loss(d_fakes, cfg.method)
 
-        loss_g = compute_g_loss(d_fakes, cfg.method)
-        self.optim_g.zero_grad(set_to_none=True)
-        self.accelerator.backward(loss_g)
-        self.optim_g.step()
-
+        self.step_optimizer(loss_g, self.optim_g)
         self.dis.requires_grad_(True)
         return loss_g
 

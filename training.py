@@ -1,15 +1,15 @@
 import contextlib
 import copy
 import datetime
+import sys
 from dataclasses import dataclass, field
 from typing import Any, Literal, Optional
 
 import torch
 import torch.nn.functional as F
-from accelerate import Accelerator, DistributedDataParallelKwargs
-from accelerate.state import AcceleratorState
 from torch import Tensor, nn
 from torch.utils.data import DataLoader
+from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 
 
@@ -45,7 +45,6 @@ def cycle(iterable):
 @dataclass
 class BaseTrainerConfig:
     conditional: bool = False
-    img2img: bool = False
     z_dim: int = 128
     method: Literal["gan", "wgan", "wgan-gp", "hinge", "lsgan"] = "gan"
     spectral_norm_d: bool = False
@@ -74,8 +73,9 @@ class BaseTrainerConfig:
     log_interval: int = 50
     log_img_interval: int = 1_000
     find_unused_parameters: bool = False
-    mixed_precision: Optional[str] = None
+    amp: bool = False
     channels_last: bool = False
+    device: Optional[str] = None
 
 
 class BaseTrainer:
@@ -84,23 +84,18 @@ class BaseTrainer:
         config = copy.deepcopy(config)
         config.lr_d = config.lr_d or config.lr
         config.lr_g = config.lr_g or config.lr
+        config.device = config.device or ("cuda" if torch.cuda.is_available() else "cpu")
+        cuda_speed_up()
 
         now = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         config.checkpoint_path += f"/{config.log_name}/{now}"
 
-        cuda_speed_up()
-        accelerator = Accelerator(
-            log_with=config.loggers,
-            project_dir="logs",
-            kwargs_handlers=[DistributedDataParallelKwargs(find_unused_parameters=config.find_unused_parameters)],
-            mixed_precision=config.mixed_precision,
-        )
-        rank_zero = accelerator.is_main_process
-        config.ema_device = config.ema_device or str(accelerator.device)
+        # if accelerator.distributed_type == "MULTI_GPU":
+        #     dis.apply(disable_bn_running_stats)
+        #     gen.apply(disable_bn_running_stats)
 
-        if accelerator.distributed_type == "MULTI_GPU":
-            dis.apply(disable_bn_running_stats)
-            gen.apply(disable_bn_running_stats)
+        dis = dis.to(device=config.device)
+        gen = gen.to(device=config.device)
 
         if config.channels_last:
             dis = dis.to(memory_format=torch.channels_last)
@@ -112,71 +107,87 @@ class BaseTrainer:
         if config.spectral_norm_g:
             apply_spectral_normalization(gen)
 
-        g_ema = EMA(gen, config.ema_decay, device=accelerator.device, enable=config.ema and rank_zero)
-        if config.ema and rank_zero:
-            accelerator.register_for_checkpointing(g_ema)
+        self.g_ema = EMA(gen, config.ema_decay, enable=config.ema)
+        self.optim_d, self.optim_g = build_optimizers(config, dis, gen)
 
-        optim_d, optim_g = build_optimizers(config, dis, gen)
-        dis, gen, optim_d, optim_g = accelerator.prepare(dis, gen, optim_d, optim_g)
-
-        if config.resume_from_checkpoint is not None:
-            accelerator.load_state(config.resume_from_checkpoint)
-
-        _config = {k: str(v) if not isinstance(v, (int, float, bool, str)) else v for k, v in vars(config).items()}
-        accelerator.init_trackers(config.log_name, config=_config)
-        accelerator.print(config, AcceleratorState(), dis, gen, optim_d, optim_g, sep="\n")
-        accelerator.print(f"D: {count_params(dis)/1e6:.2f}M params")
-        accelerator.print(f"G: {count_params(gen)/1e6:.2f}M params")
+        print(config, dis, gen, self.optim_d, self.optim_g, sep="\n")
+        print(f"D: {count_params(dis)/1e6:.2f}M params")
+        print(f"G: {count_params(gen)/1e6:.2f}M params")
 
         self.config = config
-        self.accelerator = accelerator
         self.dis = dis
         self.gen = gen
-        self.g_ema = g_ema
-        self.optim_d = optim_d
-        self.optim_g = optim_g
-        self.counter = 0
+        self.global_step = 0
+        self.logger = SummaryWriter(f"logs/{config.log_name}")
+        self.scaler = torch.cuda.amp.GradScaler() if config.amp else None
+
+    @contextlib.contextmanager
+    def autocast(self, enabled=True):
+        if self.config.amp:
+            context = torch.autocast(torch.device(self.config.device).type, torch.float16, enabled=enabled)
+            context.__enter__()
+            yield
+            context.__exit__(*sys.exc_info())
+        else:
+            yield
+
+    def step_optimizer(self, loss: Tensor, optimizer: torch.optim.Optimizer):
+        optimizer.zero_grad(set_to_none=True)
+        if self.scaler is not None:
+            self.scaler.scale(loss).backward()
+            self.scaler.step(optimizer)
+        else:
+            loss.backward()
+            optimizer.step()
 
     def train(self, dloader: DataLoader, n_steps: int):
         cfg = self.config
-        dloader = self.accelerator.prepare(dloader)
-
-        total_steps = self.counter + n_steps
+        total_steps = self.global_step + n_steps
         pbar = tqdm(
             cycle(dloader),
             total=total_steps,
-            initial=self.counter,
+            initial=self.global_step,
             leave=False,
             dynamic_ncols=True,
-            disable=not self.accelerator.is_main_process,
         )
 
         for data in pbar:
             if isinstance(data, Tensor):
                 data = (data,)
+            data = tuple(x.to(cfg.device) for x in data)
             log_dict = self.train_step(*data)
+
+            if self.scaler is not None:
+                self.scaler.update()
 
             # loss values are associated with models before the optimizer step
             # therefore, increment `step` after logging
-            if self.counter % cfg.log_interval == 0:
-                self.accelerator.log(log_dict, step=self.counter)
+            if self.global_step % cfg.log_interval == 0:
+                for k, v in log_dict.items():
+                    self.logger.add_scalar(k, v, self.global_step)
 
             if "loss/g" in log_dict:
                 self.g_ema.update(self.gen)
 
-            self.counter += 1
+            self.global_step += 1
 
-            if self.counter % cfg.checkpoint_interval == 0:
-                self.accelerator.save_state(f"{cfg.checkpoint_path}/step_{self.counter:07d}")
-
-            if self.counter >= total_steps:
+            if self.global_step >= total_steps:
                 break
 
     def train_step(self, *args):
         raise NotImplementedError
 
+    @torch.inference_mode()
+    def log_images(self, imgs: Tensor, tag: str, step: int):
+        imgs = imgs.cpu().float().clip_(-1, 1).add_(1).div_(2)
+        imgs_np = imgs.mul_(255).byte().permute(0, 2, 3, 1).numpy()
 
-def compute_g_loss(d_fakes: Tensor, method: str):
+        self.logger.add_images(tag, imgs_np, step, dataformats="NHWC")
+        # wandb_imgs = [wandb.Image(img) for img in imgs_np]
+        # wandb.log({tag: wandb_imgs}, step=step)
+
+
+def compute_g_loss(d_fakes: Tensor, method: str) -> Tensor:
     if method == "gan":
         loss_g = -F.logsigmoid(d_fakes).mean()
 
@@ -192,7 +203,7 @@ def compute_g_loss(d_fakes: Tensor, method: str):
     return loss_g
 
 
-def compute_d_loss(d_reals: Tensor, d_fakes: Tensor, method: str):
+def compute_d_loss(d_reals: Tensor, d_fakes: Tensor, method: str) -> Tensor:
     if method == "gan":
         loss_d = -F.logsigmoid(d_reals).mean() - F.logsigmoid(-d_fakes).mean()
 
@@ -211,7 +222,9 @@ def compute_d_loss(d_reals: Tensor, d_fakes: Tensor, method: str):
     return loss_d
 
 
-def build_optimizers(config: BaseTrainerConfig, dis: nn.Module, gen: nn.Module):
+def build_optimizers(
+    config: BaseTrainerConfig, dis: nn.Module, gen: nn.Module
+) -> tuple[torch.optim.Optimizer, torch.optim.Optimizer]:
     kwargs = dict(weight_decay=config.weight_decay)
     if config.optimizer in ("Adam", "AdamW"):
         kwargs.update(betas=(config.beta1, config.beta2))
@@ -237,25 +250,6 @@ def build_optimizers(config: BaseTrainerConfig, dis: nn.Module, gen: nn.Module):
     return optim_d, optim_g
 
 
-@torch.inference_mode()
-def log_images(accelerator: Accelerator, imgs: Tensor, tag: str, step: int):
-    if not accelerator.is_main_process or len(accelerator.trackers) == 0:
-        return
-
-    imgs = imgs.cpu().clip_(-1, 1).add_(1).div_(2)
-    imgs_np = imgs.mul_(255).byte().permute(0, 2, 3, 1).numpy()
-
-    for tracker in accelerator.trackers:
-        if tracker.name == "tensorboard":
-            tracker.tracker.add_images(tag, imgs_np, step, dataformats="NHWC")
-
-        elif tracker.name == "wandb":
-            import wandb
-
-            wandb_imgs = [wandb.Image(img) for img in imgs_np]
-            tracker.tracker.log({tag: wandb_imgs}, step=step)
-
-
 # reference: https://github.com/lucidrains/ema-pytorch
 class EMA:
     def __init__(
@@ -278,7 +272,7 @@ class EMA:
                 self.ema_state_dict[k].copy_(v)
 
     @torch.no_grad()
-    def update(self, model: nn.Module):
+    def update(self, model: nn.Module) -> None:
         if not self.enable:
             return
 
@@ -294,7 +288,7 @@ class EMA:
                 ema_v.lerp_(v, 1 - self.ema_decay)
 
     @staticmethod
-    def _swap_state_dict(state_dict_a, state_dict_b):
+    def _swap_state_dict(state_dict_a, state_dict_b) -> None:
         for k, v in state_dict_b.items():
             tmp = v.clone()
             v.copy_(state_dict_a[k])

@@ -123,7 +123,7 @@ class ProgressiveGANDiscriminator(BaseProgressiveGAN):
             # F.interpolate() is 20% faster than F.avg_pool() on RTX 3090
             prev_out = F.interpolate(imgs, scale_factor=0.5, mode="bilinear")
             prev_out = self.from_rgb[curr_stage + 1](prev_out)
-            out = prev_out.lerp(out, self.fade_alpha)
+            out = prev_out.lerp(out, self.fade_alpha.to(out.dtype))
 
         for stage in self.stages[curr_stage + 1 :]:
             out = stage(out)
@@ -173,7 +173,7 @@ class ProgressiveGANGenerator(BaseProgressiveGAN):
         if self.fade_alpha < 1.0:
             prev_out = self.to_rgb[curr_stage - 2](prev_out)
             prev_out = F.interpolate(prev_out, scale_factor=2, mode="nearest")
-            out = prev_out.lerp(out, self.fade_alpha)
+            out = prev_out.lerp(out, self.fade_alpha.to(out.dtype))
 
         return out
 
