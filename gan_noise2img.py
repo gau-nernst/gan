@@ -145,13 +145,22 @@ class Noise2ImgTrainer(BaseTrainer):
         loss_d = compute_d_loss(d_reals, d_fakes, cfg.method)
 
         if cfg.method == "wgan-gp":
+            # https://pytorch.org/docs/stable/notes/amp_examples.html#gradient-penalty
             alpha = torch.rand(bsize, 1, 1, 1, device=x_reals.device)
             x_inters = x_reals.detach().lerp(x_fakes.detach(), alpha).requires_grad_()
-            d_inters = self._forward(self.dis, x_inters, ys)
+            d_inters = self._forward(self.dis, x_inters, ys).sum()
 
-            (d_grad,) = torch.autograd.grad(d_inters.sum(), x_inters, create_graph=True)
-            d_grad_norm = torch.linalg.vector_norm(d_grad, dim=(1, 2, 3))
-            loss_d = loss_d + cfg.wgan_gp_lamb * (d_grad_norm - 1).square().mean()
+            if self.accelerator.scaler is not None:
+                d_inters = self.accelerator.scaler.scale(d_inters)
+                (d_grad,) = torch.autograd.grad(d_inters, x_inters, create_graph=True)
+                d_grad = d_grad / self.accelerator.scaler.get_scale()
+
+            else:
+                (d_grad,) = torch.autograd.grad(d_inters, x_inters, create_graph=True)
+
+            with self.accelerator.autocast():
+                d_grad_norm = torch.linalg.vector_norm(d_grad, dim=(1, 2, 3))
+                loss_d = loss_d + cfg.wgan_gp_lamb * (d_grad_norm - 1).square().mean()
 
         # for Progressive GAN only
         if cfg.drift_penalty > 0:

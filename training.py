@@ -74,7 +74,7 @@ class BaseTrainerConfig:
     log_interval: int = 50
     log_img_interval: int = 1_000
     find_unused_parameters: bool = False
-    mixed_precision: str = "no"
+    mixed_precision: Optional[str] = None
     channels_last: bool = False
 
 
