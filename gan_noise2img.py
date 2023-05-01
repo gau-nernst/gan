@@ -251,8 +251,6 @@ def main():
         )
         trainer.train(dloader, n_steps)
 
-    trainer.accelerator.end_training()
-
 
 if __name__ == "__main__":
     main()

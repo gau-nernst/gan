@@ -10,7 +10,7 @@ from torch.utils.data import DataLoader, Dataset
 
 from datasets import ImageFolderDataset
 from modelling import PatchGAN, ResNetGenerator, UnetGenerator
-from training import BaseTrainer, BaseTrainerConfig, compute_d_loss, compute_g_loss, log_images
+from training import BaseTrainer, BaseTrainerConfig, compute_d_loss, compute_g_loss
 from utils import add_args_from_cls, cls_from_args
 
 
@@ -59,8 +59,8 @@ class Img2ImgTrainer(BaseTrainer):
         self, config: Img2ImgTrainerConfig, dis: nn.Module, gen: nn.Module, fixed_imgs_A: Tensor, fixed_imgs_B: Tensor
     ):
         super().__init__(config, dis, gen)
-        self.fixed_imgs_A = fixed_imgs_A.to(self.accelerator.device)
-        self.fixed_imgs_B = fixed_imgs_B.to(self.accelerator.device)
+        self.fixed_imgs_A = fixed_imgs_A.to(self.config.device)
+        self.fixed_imgs_B = fixed_imgs_B.to(self.config.device)
 
     @staticmethod
     def d_loss(gen_AB, dis_B, imgs_A, imgs_B, method):
@@ -94,8 +94,8 @@ class Img2ImgTrainer(BaseTrainer):
             imgs_A, imgs_B = imgs_B, imgs_A
 
         if cfg.channels_last:
-            imgs_A = imgs_A.to(memory_format=torch.channels_last)
-            imgs_B = imgs_B.to(memory_format=torch.channels_last)
+            imgs_A = imgs_A.to(device=cfg.device, memory_format=torch.channels_last)
+            imgs_B = imgs_B.to(device=cfg.device, memory_format=torch.channels_last)
 
         gen_AB, gen_BA = self.gen[0], None
         dis_B, dis_A = self.dis[0], None
@@ -103,32 +103,30 @@ class Img2ImgTrainer(BaseTrainer):
             gen_BA = self.gen[1]
             dis_A = self.dis[1]
 
-        if self.counter % cfg.log_img_interval == 0 and self.accelerator.is_main_process:
-            with torch.inference_mode(), self.g_ema.swap_state_dict(self.gen):
+        if self.global_step % cfg.log_img_interval == 0:
+            with torch.inference_mode(), self.g_ema.swap_state_dict(self.gen), self.autocast():
                 fake_imgs_B = gen_AB(self.fixed_imgs_A)
-                log_images(self.accelerator, fake_imgs_B, "generated/B", self.counter)
+                self.log_images(fake_imgs_B, "generated/B", self.global_step)
 
                 if gen_BA is not None:
                     fake_imgs_A = gen_BA(self.fixed_imgs_B)
-                    log_images(self.accelerator, fake_imgs_A, "generated/A", self.counter)
+                    self.log_images(fake_imgs_A, "generated/A", self.global_step)
 
-        loss_d = self.d_loss(gen_AB, dis_B, imgs_A, imgs_B, cfg.method)
+        with self.autocast():
+            loss_d = self.d_loss(gen_AB, dis_B, imgs_A, imgs_B, cfg.method)
 
-        if gen_BA is not None:
-            loss_d = loss_d + self.d_loss(gen_BA, dis_A, imgs_B, imgs_A, cfg.method)
+            if gen_BA is not None:
+                loss_d = loss_d + self.d_loss(gen_BA, dis_A, imgs_B, imgs_A, cfg.method)
 
-        self.optim_d.zero_grad(set_to_none=True)
-        self.accelerator.backward(loss_d)
-        self.optim_d.step()
+        self.step_optimizer(loss_d, self.optim_d)
 
-        loss_g = self.g_loss(gen_AB, dis_B, imgs_A, imgs_B, cfg.method, cfg.l1_reg, gen_BA)
+        with self.autocast():
+            loss_g = self.g_loss(gen_AB, dis_B, imgs_A, imgs_B, cfg.method, cfg.l1_reg, gen_BA)
 
-        if cfg.model == "cyclegan":
-            loss_g = loss_g + self.g_loss(gen_BA, dis_A, imgs_B, imgs_A, cfg.method, cfg.l1_reg, gen_AB)
+            if cfg.model == "cyclegan":
+                loss_g = loss_g + self.g_loss(gen_BA, dis_A, imgs_B, imgs_A, cfg.method, cfg.l1_reg, gen_AB)
 
-        self.optim_g.zero_grad(set_to_none=True)
-        self.accelerator.backward(loss_g)
-        self.optim_g.step()
+        self.step_optimizer(loss_g, self.optim_g)
 
         return {"loss/d": loss_d.item(), "loss/g": loss_g.item()}
 
@@ -178,8 +176,8 @@ def main():
 
     config = cls_from_args(args, Img2ImgTrainerConfig)
     trainer = Img2ImgTrainer(config, dis, gen, imgs_A, imgs_B)
-    log_images(trainer.accelerator, imgs_A, "real/A", 0)
-    log_images(trainer.accelerator, imgs_B, "real/B", 0)
+    trainer.log_images(imgs_A, "real/A", 0)
+    trainer.log_images(imgs_B, "real/B", 0)
 
     dloader = DataLoader(
         train_ds,
