@@ -10,10 +10,6 @@ from tqdm import tqdm
 from modelling.dcgan import DcGanDiscriminator, DcGanGenerator
 
 
-def normalize(x: Tensor) -> Tensor:
-    return (x / 255 - 0.5) / 0.5
-
-
 def unnormalize(x: Tensor) -> Tensor:
     return ((x * 0.5 + 0.5) * 255).round().to(torch.uint8)
 
