@@ -65,4 +65,4 @@ if __name__ == "__main__":
         with torch.no_grad():
             fakes = gen(fixed_zs)
         fakes = fakes.cpu().view(10, 10, 32, 32).permute(0, 2, 1, 3).reshape(1, 320, 320)
-        write_png(unnormalize(fakes), f"images/epoch{epoch_idx + 1:04d}.png")
+        write_png(unnormalize(fakes), f"images_mnist/epoch{epoch_idx + 1:04d}.png")
