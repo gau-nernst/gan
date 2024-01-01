@@ -21,7 +21,7 @@ def gan_d_loss(disc: nn.Module, reals: Tensor, fakes: Tensor) -> Tensor:
     return -F.logsigmoid(disc(reals)).mean() - F.logsigmoid(-disc(fakes)).mean()
 
 
-def gan_g_loss(d_fakes: Tensor):
+def gan_g_loss(d_fakes: Tensor, disc: nn.Module, reals: Tensor) -> Tensor:
     return -F.logsigmoid(d_fakes).mean()
 
 
@@ -32,8 +32,18 @@ def wgan_d_loss(disc: nn.Module, reals: Tensor, fakes: Tensor) -> Tensor:
     return -disc(reals).mean() + disc(fakes).mean()
 
 
-def wgan_g_loss(d_fakes: Tensor):
+def wgan_g_loss(d_fakes: Tensor, disc: nn.Module, reals: Tensor) -> Tensor:
     return -d_fakes.mean()
+
+
+def rgan_d_loss(disc: nn.Module, reals: Tensor, fakes: Tensor) -> Tensor:
+    return -F.logsigmoid(disc(reals) - disc(fakes))
+
+
+def rgan_g_loss(d_fakes: Tensor, disc: nn.Module, reals: Tensor) -> Tensor:
+    with torch.no_grad():
+        d_reals = disc(reals)
+    return -F.logsigmoid(d_fakes - d_reals)
 
 
 if __name__ == "__main__":
@@ -53,6 +63,7 @@ if __name__ == "__main__":
     d_criterion, g_criterion = {
         "gan": (gan_d_loss, gan_g_loss),
         "wgan": (wgan_d_loss, wgan_g_loss),
+        "rgan": (rgan_d_loss, rgan_g_loss),
     }[method]
 
     lr = 2e-4
@@ -96,7 +107,7 @@ if __name__ == "__main__":
             disc.requires_grad_(False)
             zs = torch.randn(batch_size, 128, device=device)
             with autocast_ctx:
-                loss_g = g_criterion(disc(gen(zs)))
+                loss_g = g_criterion(disc(gen(zs)), disc, reals)
             scaler.scale(loss_g).backward()
             scaler.step(optim_g)
             optim_g.zero_grad()
