@@ -19,6 +19,7 @@ if __name__ == "__main__":
     device = "cuda"
     n_epochs = 10
     batch_size = 128
+    method = "wgan"
 
     disc = DcGanDiscriminator().to(device)
     gen = DcGanGenerator().to(device)
@@ -52,15 +53,26 @@ if __name__ == "__main__":
             zs = torch.randn(batch_size, 128, device=device)
             with torch.no_grad():
                 fakes = gen(zs)
-            loss_d = -F.logsigmoid(disc(reals)).mean() - F.logsigmoid(-disc(fakes)).mean()
+            d_reals = disc(reals)
+            d_fakes = disc(fakes)
+            if method == "wgan":
+                with torch.no_grad():
+                    for p in disc.parameters():
+                        p.clip_(-0.01, 0.01)
+                loss_d = -d_reals.mean() + d_fakes.mean()
+            else:
+                loss_d = -F.logsigmoid(d_reals).mean() - F.logsigmoid(-d_fakes).mean()
             loss_d.backward()
             optim_d.step()
             optim_d.zero_grad()
 
             disc.requires_grad_(False)
             zs = torch.randn(batch_size, 128, device=device)
-            fakes = gen(zs)
-            loss_g = -F.logsigmoid(disc(fakes)).mean()
+            d_fakes = disc(gen(zs))
+            if method == "wgan":
+                loss_g = -d_fakes.mean()
+            else:
+                loss_g = -F.logsigmoid(d_fakes).mean()
             loss_g.backward()
             optim_g.step()
             optim_g.zero_grad()
