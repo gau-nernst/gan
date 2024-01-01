@@ -3,7 +3,7 @@ import copy
 import datetime
 import sys
 from dataclasses import dataclass, field
-from typing import Any, Literal, Optional
+from typing import Literal, Optional
 
 import torch
 import torch.nn.functional as F
@@ -25,11 +25,6 @@ def apply_spectral_normalization(module: nn.Module):
             setattr(module, name, torch.nn.utils.parametrizations.spectral_norm(child))
         else:
             apply_spectral_normalization(child)
-
-
-def disable_bn_running_stats(module: nn.Module):
-    if isinstance(module, nn.modules.batchnorm._BatchNorm):
-        module.track_running_stats = False
 
 
 def count_params(module: nn.Module) -> int:
@@ -89,10 +84,6 @@ class BaseTrainer:
 
         now = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         config.checkpoint_path += f"/{config.log_name}/{now}"
-
-        # if accelerator.distributed_type == "MULTI_GPU":
-        #     dis.apply(disable_bn_running_stats)
-        #     gen.apply(disable_bn_running_stats)
 
         dis = dis.to(device=config.device)
         gen = gen.to(device=config.device)
