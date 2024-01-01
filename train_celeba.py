@@ -7,6 +7,7 @@ from torchvision.io import write_png
 from torchvision.transforms import v2
 from tqdm import tqdm
 
+from ema import EMA
 from modelling.dcgan import DcGanDiscriminator, DcGanGenerator
 
 
@@ -23,6 +24,8 @@ if __name__ == "__main__":
     gen = DcGanGenerator().to(device)
     print(disc)
     print(gen)
+
+    gen_ema = EMA(gen)
 
     lr = 2e-4
     optim_d = torch.optim.AdamW(disc.parameters(), lr, betas=(0.5, 0.999), weight_decay=0)
@@ -62,8 +65,10 @@ if __name__ == "__main__":
             optim_g.step()
             optim_g.zero_grad()
             disc.requires_grad_(True)
+            gen_ema.step()
 
-        with torch.no_grad():
-            fakes = gen(fixed_zs)
-        fakes = fakes.cpu().view(10, 10, 3, 64, 64).permute(2, 0, 3, 1, 4).reshape(3, 640, 640)
-        write_png(unnormalize(fakes), f"images_celeba/epoch{epoch_idx + 1:04d}.png")
+        for suffix, model in [("", gen), ("_ema", gen_ema)]:
+            with torch.no_grad():
+                fakes = model(fixed_zs)
+            fakes = fakes.cpu().view(10, 10, 3, 64, 64).permute(2, 0, 3, 1, 4).reshape(3, 640, 640)
+            write_png(unnormalize(fakes), f"images_celeba/epoch{epoch_idx + 1:04d}{suffix}.png")
