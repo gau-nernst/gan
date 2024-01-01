@@ -1,34 +1,44 @@
 import torch
 import torch.nn.functional as F
+from torch import Tensor
 from torchvision.datasets import MNIST
+from torchvision.io import write_png
 from tqdm import tqdm
 
-from modelling.dcgan import DCGANDiscriminator, DCGANGenerator
+from modelling.dcgan import DcGanDiscriminator, DcGanGenerator
+
+
+def normalize(x: Tensor) -> Tensor:
+    return (x / 255 - 0.5) / 0.5
+
+
+def unnormalize(x: Tensor) -> Tensor:
+    return ((x * 0.5 + 0.5) * 255).round().to(torch.uint8)
 
 
 if __name__ == "__main__":
     device = "cuda"
 
-    disc = DCGANDiscriminator(img_channels=1, img_size=32).to(device)
-    gen = DCGANGenerator(img_channels=1, img_size=32).to(device)
+    disc = DcGanDiscriminator(img_channels=1, img_size=32).to(device)
+    gen = DcGanGenerator(img_channels=1, img_size=32).to(device)
+    print(disc)
+    print(gen)
 
     lr = 2e-4
-    optim_d = torch.optim.AdamW(disc.parameters(), lr, betas=(0.5, 0.95), weight_decay=0)
-    optim_g = torch.optim.AdamW(gen.parameters(), lr, betas=(0.5, 0.95), weight_decay=0)
+    optim_d = torch.optim.AdamW(disc.parameters(), lr, betas=(0.5, 0.999), weight_decay=0)
+    optim_g = torch.optim.AdamW(gen.parameters(), lr, betas=(0.5, 0.999), weight_decay=0)
 
     images = MNIST("data", download=True).data  # (60_000, 28, 28)
     images = F.pad(images, (2, 2, 2, 2))  # (60_000, 32, 32)
-    images = images / 255  # uint8 -> float
-    images = (images - 0.5) / 0.5  # [0,1] -> [-1,1]
-    images = images.to(device)
+    images = normalize(images).to(device)
 
     n_epochs = 10
-    batch_size = 64
+    batch_size = 32
 
     fixed_zs = torch.randn(100, 128, device=device)
     step = 0
 
-    for _ in range(n_epochs):
+    for epoch_idx in range(n_epochs):
         indices = torch.randperm(images.shape[0], device=device)
         images = images[indices]
 
@@ -54,4 +64,5 @@ if __name__ == "__main__":
 
         with torch.no_grad():
             fakes = gen(fixed_zs)
-        fakes.view(10, 10, 32, 32).permute(0, 2, 1, 3)
+        fakes = fakes.cpu().view(10, 10, 32, 32).permute(0, 2, 1, 3).reshape(1, 320, 320)
+        write_png(unnormalize(fakes), f"images/epoch{epoch_idx + 1:04d}.png")

@@ -1,6 +1,6 @@
 from .cgan import CGANDiscriminator, CGANGenerator
 from .cyclegan import ResNetGenerator
-from .dcgan import DCGANDiscriminator, DCGANGenerator
+from .dcgan import DcGanDiscriminator, DcGanGenerator
 from .esrgan import ESRGANGenerator
 from .pix2pix import PatchGAN, UnetGenerator
 from .progressive_gan import ProgressiveGANDiscriminator, ProgressiveGANGenerator
@@ -12,7 +12,7 @@ from .stylegan2 import StyleGAN2Discriminator, StyleGAN2Generator
 
 def get_generator_cls(name: str):
     return dict(
-        dcgan=DCGANGenerator,
+        dcgan=DcGanGenerator,
         progressive_gan=ProgressiveGANGenerator,
         stylegan=StyleGANGenerator,
         stylegan2=StyleGAN2Generator,
@@ -27,7 +27,7 @@ def get_generator_cls(name: str):
 
 def get_discriminator_cls(name: str):
     return dict(
-        dcgan=DCGANDiscriminator,
+        dcgan=DcGanDiscriminator,
         progressive_gan=ProgressiveGANDiscriminator,
         stylegan=StyleGANDiscriminator,
         stylegan2=StyleGAN2Discriminator,

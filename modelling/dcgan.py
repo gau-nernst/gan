@@ -9,7 +9,7 @@
 from torch import nn
 
 
-class DCGANDiscriminator(nn.Sequential):
+class DcGanDiscriminator(nn.Sequential):
     def __init__(self, img_channels: int = 3, img_size: int = 64, base_dim: int = 64, depth: int = 4) -> None:
         super().__init__()
         in_ch = img_channels
@@ -31,7 +31,7 @@ class DCGANDiscriminator(nn.Sequential):
         self.apply(init_weights)
 
 
-class DCGANGenerator(nn.Sequential):
+class DcGanGenerator(nn.Sequential):
     def __init__(
         self, img_channels: int = 3, img_size: int = 64, base_dim: int = 64, depth: int = 4, z_dim: int = 128
     ) -> None:
