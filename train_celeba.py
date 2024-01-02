@@ -1,4 +1,7 @@
+import argparse
+import inspect
 import os
+from dataclasses import dataclass
 
 import torch
 import torch.nn.functional as F
@@ -46,16 +49,41 @@ def rgan_g_loss(d_fakes: Tensor, disc: nn.Module, reals: Tensor) -> Tensor:
     return -F.logsigmoid(d_fakes - d_reals).mean()
 
 
-if __name__ == "__main__":
-    device = "cuda"
-    mixed_precision = True
-    n_epochs = 10
-    batch_size = 128
-    method = "rgan"
-    log_dir = "images_celeba_rgan_dreflect"
+@dataclass
+class TrainConfig:
+    device: str = "cuda" if torch.cuda.is_available() else "cpu"
+    mixed_precision: bool = False
+    n_epochs: int = 10
+    lr: float = 2e-4
+    batch_size: int = 128
+    method: str = "gan"
+    log_dir: str = "images_celeba"
 
-    disc = DcGanDiscriminator().to(device)
-    gen = DcGanGenerator().to(device)
+
+def make_parser(fn):
+    parser = argparse.ArgumentParser()
+
+    for k, v in inspect.signature(fn).parameters.items():
+        if v.annotation in (str, int, float):
+            parser.add_argument(f"--{k}", type=v.annotation, default=v.default)
+        elif v.annotation is bool:
+            parser.add_argument(f"--{k}", action="store_true")
+        else:
+            raise RuntimeError(f"Unsupported type {v.annotation} for argument {k}")
+
+    return parser
+
+
+if __name__ == "__main__":
+    args = make_parser(TrainConfig).parse_args()
+    cfg = TrainConfig(**vars(args))
+
+    print("Config:")
+    for k, v in vars(cfg).items():
+        print(f"  {k}: {v}")
+
+    disc = DcGanDiscriminator().to(cfg.device)
+    gen = DcGanGenerator().to(cfg.device)
     print(disc)
     print(gen)
 
@@ -64,11 +92,10 @@ if __name__ == "__main__":
         "gan": (gan_d_loss, gan_g_loss),
         "wgan": (wgan_d_loss, wgan_g_loss),
         "rgan": (rgan_d_loss, rgan_g_loss),
-    }[method]
+    }[cfg.method]
 
-    lr = 2e-4
-    optim_d = torch.optim.AdamW(disc.parameters(), lr, betas=(0.5, 0.999), weight_decay=0)
-    optim_g = torch.optim.AdamW(gen.parameters(), lr, betas=(0.5, 0.999), weight_decay=0)
+    optim_d = torch.optim.AdamW(disc.parameters(), cfg.lr, betas=(0.5, 0.999), weight_decay=0)
+    optim_g = torch.optim.AdamW(gen.parameters(), cfg.lr, betas=(0.5, 0.999), weight_decay=0)
 
     transform = v2.Compose(
         [
@@ -80,17 +107,17 @@ if __name__ == "__main__":
         ]
     )
     ds = CelebA("data", transform=transform, download=True)
-    dloader = DataLoader(ds, batch_size, shuffle=True, num_workers=4, drop_last=True)
+    dloader = DataLoader(ds, cfg.batch_size, shuffle=True, num_workers=4, drop_last=True)
 
-    autocast_ctx = torch.autocast(device, dtype=torch.bfloat16, enabled=mixed_precision)
-    os.makedirs(log_dir, exist_ok=True)
-    fixed_zs = torch.randn(100, 128, device=device)
+    autocast_ctx = torch.autocast(cfg.device, dtype=torch.bfloat16, enabled=cfg.mixed_precision)
+    os.makedirs(cfg.log_dir, exist_ok=True)
+    fixed_zs = torch.randn(100, 128, device=cfg.device)
     step = 0
 
-    for epoch_idx in range(n_epochs):
+    for epoch_idx in range(cfg.n_epochs):
         for reals, _ in tqdm(dloader):
-            reals = reals.to(device)
-            zs = torch.randn(batch_size, 128, device=device)
+            reals = reals.to(cfg.device)
+            zs = torch.randn(cfg.batch_size, 128, device=cfg.device)
             with autocast_ctx:
                 with torch.no_grad():
                     fakes = gen(zs)
@@ -100,7 +127,7 @@ if __name__ == "__main__":
             optim_d.zero_grad()
 
             disc.requires_grad_(False)
-            zs = torch.randn(batch_size, 128, device=device)
+            zs = torch.randn(cfg.batch_size, 128, device=cfg.device)
             with autocast_ctx:
                 loss_g = g_criterion(disc(gen(zs)), disc, reals)
             loss_g.backward()
@@ -113,4 +140,4 @@ if __name__ == "__main__":
             with autocast_ctx, torch.no_grad():
                 fakes = model(fixed_zs)
             fakes = fakes.cpu().view(10, 10, 3, 64, 64).permute(2, 0, 3, 1, 4).reshape(3, 640, 640)
-            write_png(unnormalize(fakes), f"{log_dir}/epoch{epoch_idx + 1:04d}{suffix}.png")
+            write_png(unnormalize(fakes), f"{cfg.log_dir}/epoch{epoch_idx + 1:04d}{suffix}.png")
