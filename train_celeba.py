@@ -37,22 +37,22 @@ def wgan_g_loss(d_fakes: Tensor, disc: nn.Module, reals: Tensor) -> Tensor:
 
 
 def rgan_d_loss(disc: nn.Module, reals: Tensor, fakes: Tensor) -> Tensor:
-    return -F.logsigmoid(disc(reals) - disc(fakes))
+    return -F.logsigmoid(disc(reals) - disc(fakes)).mean()
 
 
 def rgan_g_loss(d_fakes: Tensor, disc: nn.Module, reals: Tensor) -> Tensor:
     with torch.no_grad():
         d_reals = disc(reals)
-    return -F.logsigmoid(d_fakes - d_reals)
+    return -F.logsigmoid(d_fakes - d_reals).mean()
 
 
 if __name__ == "__main__":
     device = "cuda"
-    mixed_precision = "fp16"
+    mixed_precision = True
     n_epochs = 10
     batch_size = 128
-    method = "wgan"
-    log_dir = "images_celeba_wgan"
+    method = "rgan"
+    log_dir = "images_celeba_rgan_dreflect"
 
     disc = DcGanDiscriminator().to(device)
     gen = DcGanGenerator().to(device)
@@ -82,12 +82,7 @@ if __name__ == "__main__":
     ds = CelebA("data", transform=transform, download=True)
     dloader = DataLoader(ds, batch_size, shuffle=True, num_workers=4, drop_last=True)
 
-    autocast_ctx = torch.autocast(
-        device_type=device,
-        dtype=dict(none=None, fp16=torch.float16, bf16=torch.bfloat16)[mixed_precision],
-        enabled=mixed_precision != "none",
-    )
-    scaler = torch.cuda.amp.GradScaler(enabled=mixed_precision == "fp16")
+    autocast_ctx = torch.autocast(device, dtype=torch.bfloat16, enabled=mixed_precision)
     os.makedirs(log_dir, exist_ok=True)
     fixed_zs = torch.randn(100, 128, device=device)
     step = 0
@@ -100,21 +95,19 @@ if __name__ == "__main__":
                 with torch.no_grad():
                     fakes = gen(zs)
                 loss_d = d_criterion(disc, reals, fakes)
-            scaler.scale(loss_d).backward()
-            scaler.step(optim_d)
+            loss_d.backward()
+            optim_d.step()
             optim_d.zero_grad()
 
             disc.requires_grad_(False)
             zs = torch.randn(batch_size, 128, device=device)
             with autocast_ctx:
                 loss_g = g_criterion(disc(gen(zs)), disc, reals)
-            scaler.scale(loss_g).backward()
-            scaler.step(optim_g)
+            loss_g.backward()
+            optim_g.step()
             optim_g.zero_grad()
             disc.requires_grad_(True)
             gen_ema.step()
-
-            scaler.update()
 
         for suffix, model in [("", gen), ("_ema", gen_ema)]:
             with autocast_ctx, torch.no_grad():
