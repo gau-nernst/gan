@@ -20,33 +20,39 @@ def unnormalize(x: Tensor) -> Tensor:
     return ((x * 0.5 + 0.5) * 255).round().to(torch.uint8)
 
 
-def gan_d_loss(disc: nn.Module, reals: Tensor, fakes: Tensor) -> Tensor:
-    return -F.logsigmoid(disc(reals)).mean() - F.logsigmoid(-disc(fakes)).mean()
+class GAN:
+    @staticmethod
+    def d_loss(disc: nn.Module, reals: Tensor, fakes: Tensor) -> Tensor:
+        return -F.logsigmoid(disc(reals)).mean() - F.logsigmoid(-disc(fakes)).mean()
+
+    @staticmethod
+    def g_loss(d_fakes: Tensor, disc: nn.Module, reals: Tensor) -> Tensor:
+        return -F.logsigmoid(d_fakes).mean()
 
 
-def gan_g_loss(d_fakes: Tensor, disc: nn.Module, reals: Tensor) -> Tensor:
-    return -F.logsigmoid(d_fakes).mean()
+class WGAN:
+    @staticmethod
+    def d_loss(disc: nn.Module, reals: Tensor, fakes: Tensor) -> Tensor:
+        with torch.no_grad():
+            for p in disc.parameters():
+                p.clip_(-0.01, 0.01)
+        return -disc(reals).mean() + disc(fakes).mean()
+
+    @staticmethod
+    def g_loss(d_fakes: Tensor, disc: nn.Module, reals: Tensor) -> Tensor:
+        return -d_fakes.mean()
 
 
-def wgan_d_loss(disc: nn.Module, reals: Tensor, fakes: Tensor) -> Tensor:
-    with torch.no_grad():
-        for p in disc.parameters():
-            p.clip_(-0.01, 0.01)
-    return -disc(reals).mean() + disc(fakes).mean()
+class RGAN:
+    @staticmethod
+    def d_loss(disc: nn.Module, reals: Tensor, fakes: Tensor) -> Tensor:
+        return -F.logsigmoid(disc(reals) - disc(fakes)).mean()
 
-
-def wgan_g_loss(d_fakes: Tensor, disc: nn.Module, reals: Tensor) -> Tensor:
-    return -d_fakes.mean()
-
-
-def rgan_d_loss(disc: nn.Module, reals: Tensor, fakes: Tensor) -> Tensor:
-    return -F.logsigmoid(disc(reals) - disc(fakes)).mean()
-
-
-def rgan_g_loss(d_fakes: Tensor, disc: nn.Module, reals: Tensor) -> Tensor:
-    with torch.no_grad():
-        d_reals = disc(reals)
-    return -F.logsigmoid(d_fakes - d_reals).mean()
+    @staticmethod
+    def g_loss(d_fakes: Tensor, disc: nn.Module, reals: Tensor) -> Tensor:
+        with torch.no_grad():
+            d_reals = disc(reals)
+        return -F.logsigmoid(d_fakes - d_reals).mean()
 
 
 @dataclass
@@ -88,10 +94,10 @@ if __name__ == "__main__":
     print(gen)
 
     gen_ema = EMA(gen)
-    d_criterion, g_criterion = {
-        "gan": (gan_d_loss, gan_g_loss),
-        "wgan": (wgan_d_loss, wgan_g_loss),
-        "rgan": (rgan_d_loss, rgan_g_loss),
+    criterion = {
+        "gan": GAN,
+        "wgan": WGAN,
+        "rgan": RGAN,
     }[cfg.method]
 
     optim_d = torch.optim.AdamW(disc.parameters(), cfg.lr, betas=(0.5, 0.999), weight_decay=0)
@@ -121,7 +127,7 @@ if __name__ == "__main__":
             with autocast_ctx:
                 with torch.no_grad():
                     fakes = gen(zs)
-                loss_d = d_criterion(disc, reals, fakes)
+                loss_d = criterion.d_loss(disc, reals, fakes)
             loss_d.backward()
             optim_d.step()
             optim_d.zero_grad()
@@ -129,7 +135,7 @@ if __name__ == "__main__":
             disc.requires_grad_(False)
             zs = torch.randn(cfg.batch_size, 128, device=cfg.device)
             with autocast_ctx:
-                loss_g = g_criterion(disc(gen(zs)), disc, reals)
+                loss_g = criterion.g_loss(disc(gen(zs)), disc, reals)
             loss_g.backward()
             optim_g.step()
             optim_g.zero_grad()
