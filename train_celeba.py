@@ -5,55 +5,20 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import torch
-import torch.nn.functional as F
-from torch import Tensor, nn
+import wandb
+from torch import Tensor
 from torch.utils.data import DataLoader
 from torchvision import datasets, io
 from torchvision.transforms import v2
 from tqdm import tqdm
 
-import wandb
 from ema import EMA
+from losses import get_gan_loss
 from modelling.dcgan import DcGanDiscriminator, DcGanGenerator
 
 
 def unnormalize(x: Tensor) -> Tensor:
     return ((x * 0.5 + 0.5) * 255).round().to(torch.uint8)
-
-
-class GAN:
-    @staticmethod
-    def d_loss(disc: nn.Module, reals: Tensor, fakes: Tensor) -> Tensor:
-        return -F.logsigmoid(disc(reals)).mean() - F.logsigmoid(-disc(fakes)).mean()
-
-    @staticmethod
-    def g_loss(d_fakes: Tensor, disc: nn.Module, reals: Tensor) -> Tensor:
-        return -F.logsigmoid(d_fakes).mean()
-
-
-class WGAN:
-    @staticmethod
-    def d_loss(disc: nn.Module, reals: Tensor, fakes: Tensor) -> Tensor:
-        with torch.no_grad():
-            for p in disc.parameters():
-                p.clip_(-0.01, 0.01)
-        return -disc(reals).mean() + disc(fakes).mean()
-
-    @staticmethod
-    def g_loss(d_fakes: Tensor, disc: nn.Module, reals: Tensor) -> Tensor:
-        return -d_fakes.mean()
-
-
-class RGAN:
-    @staticmethod
-    def d_loss(disc: nn.Module, reals: Tensor, fakes: Tensor) -> Tensor:
-        return -F.logsigmoid(disc(reals) - disc(fakes)).mean()
-
-    @staticmethod
-    def g_loss(d_fakes: Tensor, disc: nn.Module, reals: Tensor) -> Tensor:
-        with torch.no_grad():
-            d_reals = disc(reals)
-        return -F.logsigmoid(d_fakes - d_reals).mean()
 
 
 @dataclass
@@ -107,11 +72,7 @@ if __name__ == "__main__":
     print(gen)
 
     gen_ema = EMA(gen)
-    criterion = {
-        "gan": GAN,
-        "wgan": WGAN,
-        "rgan": RGAN,
-    }[cfg.method]
+    criterion = get_gan_loss(cfg.method)
 
     optim_cls = getattr(torch.optim, cfg.optimizer)
     optim_d = optim_cls(disc.parameters(), cfg.lr, weight_decay=0, **cfg.optimizer_kwargs)
