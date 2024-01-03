@@ -1,25 +1,27 @@
 # Generative Adversarial Networks (GANs)
 
+NOTE: I'm in the midst of re-writing the training script. Some of the commands below might not run correctly.
+
 Features:
 
 - GAN losses:
-  - Original GAN loss (non-saturating)
-  - WGAN and WGAN-GP
+  - [Original GAN loss](https://arxiv.org/abs/1406.2661) (non-saturating version i.e. replace `log(1-sigmoid(d(x)))` with `logsigmoid(-d(x))`)
+  - [WGAN](https://arxiv.org/abs/1701.07875) and [WGAN-GP](https://arxiv.org/abs/1704.00028)
   - Hinge loss
-  - Least square loss (LSGAN)
+  - [LSGAN](https://arxiv.org/abs/1611.04076)
 - GAN regularization:
   - WGAN: weight-clipping and gradient-penalty (WGAN-GP)
   - Spectral norm (SN-GAN)
   - R1 (StyleGAN, StyleGAN2)
   - TODO: path length regularization (StyleGAN2)
 - Architectures
-  - DCGAN
+  - [DCGAN](https://arxiv.org/abs/1511.06434)
   - Conditional GAN (modified for CNN)
   - NVIDIA GANs:
-    - Progressive GAN
-    - StyleGAN
-    - StyleGAN2
-  - SA-GAN
+    - [Progressive GAN](https://arxiv.org/pdf/1710.10196)
+    - [StyleGAN](https://arxiv.org/abs/1812.04948)
+    - [StyleGAN2](https://arxiv.org/abs/1912.04958)
+  - [SA-GAN](https://arxiv.org/pdf/1805.08318)
 - Img2Img:
   - Pix2Pix / CycleGAN: PatchGAN discriminator, Unet and ResNet generator
     - Dropout not included. Batch norm is replaced with Instance norm.
@@ -32,17 +34,17 @@ TODO:
 - AC-GAN
 - BigGAN
 
-Goodies:
+Notes in train script:
 
-- Mixed precision and distributed training is handled by [Accelerate](https://github.com/huggingface/accelerate) (distributed training is not regularly tested)
-- Logging with Tensorboard and W&B
+- For mixed precision training, only bf16 is supported (so that I don't need to use gradient scaler).
+- No multi-GPU support. (most GANs don't benefit from training at a larger batch size anyway)
 
 ## Usage
 
-Train DCGAN on MNIST, using hyperparameters specified in DCGAN paper (image size is fixed at 32x32)
+Train DCGAN on MNIST (28x28 padded to 32x32)
 
 ```bash
-python gan_mnist.py --model dcgan --method gan --log_name mnist_dcgan --batch_size 32 --n_steps 100000 --lr 2e-4 --beta1 0.5 --beta2 0.999
+python train_mnist.py
 ```
 
 Add `--conditional` for conditional generation (using Conditional GAN. See `gan_mnist.py` for more details)
@@ -51,10 +53,10 @@ Unconditional generation | Conditional generation
 -------------------------|-----------------------
 <video src="https://user-images.githubusercontent.com/26946864/211148684-4e41a917-6459-408f-bd89-e99392ad918a.mp4"> | <video src="https://user-images.githubusercontent.com/26946864/211149361-368e77cb-584b-49fa-9b02-83f175abb422.mp4">
 
-Train DCGAN on CelebA to generate 64x64 images, same hyperparameters as above, with EMA
+Train DCGAN on CelebA (64x64)
 
 ```bash
-python gan_celeba.py --model dcgan --method gan --img_size 64 --log_name celeba_dcgan --batch_size 128 --n_steps 100000 --lr 2e-4 --beta1 0.5 --beta2 0.999 --ema
+python train_celeba.py --mixed_precision --log_dir images_celeba
 ```
 
 Without EMA | With EMA
@@ -84,34 +86,6 @@ CycleGAN
 ```bash
 python gan_img2img.py --dataset horse2zebra --model cyclegan --method lsgan --loggers tensorboard --log_name cyclegan_horse2zebra --beta1 0.5 --beta2 0.999 --lr_d 1e-3 --lr_g 2e-3 --batch_size 10 --mixed_precision fp16 --checkpoint_interval 20_000 --n_steps 25_000 --ema --compile
 ```
-
-### Usage with HF's Accelerate
-
-Run `accelerate config` to create a default configuration. Then you can launch as:
-
-```bash
-accelerate launch gan_celeba.py ...
-```
-
-Mixed-precision training
-
-```bash
-accelerate launch --mixed_precision fp16 gan_celeba.py ...
-```
-
-DDP training (w/ mixed-precision) (not so useful since GANs typically cannot use large batch size)
-
-```bash
-accelerate launch --num_processes 4 gan_celeba.py ...
-```
-
-With `torch.compile()` and mixed-precision training (there are some errors...)
-
-```bash
-accelerate launch --mixed_precision fp16 --dynamo_backend inductor gan_celeba.py ...
-```
-
-For other options, see `accelerate -h` or [here](https://huggingface.co/docs/accelerate/basic_tutorials/launch).
 
 ## Lessons
 
