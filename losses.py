@@ -6,6 +6,7 @@ from torch import Tensor, nn
 def get_gan_loss(name: str):
     return {
         "gan": GAN,
+        "lsgan": LSGAN,
         "wgan": WGAN,
         "wgan-gp": WGAN_GP,
         "rgan": RGAN,
@@ -21,6 +22,17 @@ class GAN:
     @staticmethod
     def g_loss(d_fakes: Tensor, disc: nn.Module, reals: Tensor) -> Tensor:
         return -F.logsigmoid(d_fakes).mean()
+
+
+# https://arxiv.org/abs/1611.04076
+class LSGAN:
+    @staticmethod
+    def d_loss(disc: nn.Module, reals: Tensor, fakes: Tensor) -> Tensor:
+        return (disc(reals) - 1).square().mean() + disc(fakes).square().mean()
+
+    @staticmethod
+    def g_loss(d_fakes: Tensor, disc: nn.Module, reals: Tensor) -> Tensor:
+        return (d_fakes - 1).square().mean()
 
 
 # https://arxiv.org/abs/1701.07875
