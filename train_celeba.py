@@ -1,6 +1,7 @@
 import argparse
 import inspect
-from dataclasses import dataclass
+import json
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import torch
@@ -59,11 +60,15 @@ class RGAN:
 class TrainConfig:
     device: str = "cuda" if torch.cuda.is_available() else "cpu"
     mixed_precision: bool = False
-    n_epochs: int = 25
+    n_iters: int = 30_000
+    n_disc: int = 1
     lr: float = 2e-4
+    optimizer: str = "AdamW"
+    optimizer_kwargs: dict = field(default_factory=dict)
     batch_size: int = 128
     method: str = "gan"
     run_name: str = "dcgan_celeba"
+    log_img_interval: int = 1_000
 
 
 def make_parser(fn):
@@ -74,10 +79,18 @@ def make_parser(fn):
             parser.add_argument(f"--{k}", type=v.annotation, default=v.default)
         elif v.annotation is bool:
             parser.add_argument(f"--{k}", action="store_true")
+        elif v.annotation is dict:
+            parser.add_argument(f"--{k}", type=json.loads, default=dict())
         else:
             raise RuntimeError(f"Unsupported type {v.annotation} for argument {k}")
 
     return parser
+
+
+def cycle(iterator):
+    while True:
+        for x in iterator:
+            yield x
 
 
 if __name__ == "__main__":
@@ -100,8 +113,9 @@ if __name__ == "__main__":
         "rgan": RGAN,
     }[cfg.method]
 
-    optim_d = torch.optim.AdamW(disc.parameters(), cfg.lr, betas=(0.5, 0.999), weight_decay=0)
-    optim_g = torch.optim.AdamW(gen.parameters(), cfg.lr, betas=(0.5, 0.999), weight_decay=0)
+    optim_cls = getattr(torch.optim, cfg.optimizer)
+    optim_d = optim_cls(disc.parameters(), cfg.lr, weight_decay=0, **cfg.optimizer_kwargs)
+    optim_g = optim_cls(gen.parameters(), cfg.lr, weight_decay=0, **cfg.optimizer_kwargs)
 
     transform = v2.Compose(
         [
@@ -113,7 +127,8 @@ if __name__ == "__main__":
         ]
     )
     ds = datasets.CelebA("data", transform=transform, download=True)
-    dloader = DataLoader(ds, cfg.batch_size, shuffle=True, num_workers=4, drop_last=True)
+    dloader = DataLoader(ds, cfg.batch_size, shuffle=True, num_workers=4, pin_memory=True, drop_last=True)
+    dloader = cycle(dloader)
 
     autocast_ctx = torch.autocast(cfg.device, dtype=torch.bfloat16, enabled=cfg.mixed_precision)
     fixed_zs = torch.randn(100, 128, device=cfg.device)
@@ -123,10 +138,12 @@ if __name__ == "__main__":
     log_img_dir.mkdir(parents=True, exist_ok=True)
 
     step = 0  # generator update step
-
-    for epoch_idx in range(cfg.n_epochs):
-        for reals, _ in tqdm(dloader):
+    pbar = tqdm(total=cfg.n_iters)
+    while step < cfg.n_iters:
+        for _ in range(cfg.n_disc):
+            reals, _ = next(dloader)
             reals = reals.to(cfg.device)
+
             zs = torch.randn(cfg.batch_size, 128, device=cfg.device)
             with autocast_ctx:
                 with torch.no_grad():
@@ -136,23 +153,25 @@ if __name__ == "__main__":
             optim_d.step()
             optim_d.zero_grad()
 
-            disc.requires_grad_(False)
-            zs = torch.randn(cfg.batch_size, 128, device=cfg.device)
-            with autocast_ctx:
-                loss_g = criterion.g_loss(disc(gen(zs)), disc, reals)
-            loss_g.backward()
-            optim_g.step()
-            optim_g.zero_grad()
-            disc.requires_grad_(True)
-            gen_ema.step()
+        disc.requires_grad_(False)
+        zs = torch.randn(cfg.batch_size, 128, device=cfg.device)
+        with autocast_ctx:
+            loss_g = criterion.g_loss(disc(gen(zs)), disc, reals)
+        loss_g.backward()
+        optim_g.step()
+        optim_g.zero_grad()
+        disc.requires_grad_(True)
+        gen_ema.step()
 
-            step += 1
-            if step % 50 == 0:
-                logger.log({"loss/d": loss_d.item(), "loss/g": loss_g.item()}, step=step)
+        step += 1
+        pbar.update()
+        if step % 50 == 0:
+            logger.log({"loss/d": loss_d.item(), "loss/g": loss_g.item()}, step=step)
 
-        for suffix, model in [("", gen), ("_ema", gen_ema)]:
-            with autocast_ctx, torch.no_grad():
-                fakes = model(fixed_zs)
-            fakes = fakes.cpu().view(10, 10, 3, 64, 64).permute(2, 0, 3, 1, 4).reshape(3, 640, 640)
-            fakes = unnormalize(fakes)
-            io.write_png(fakes, f"{log_img_dir}/epoch{epoch_idx + 1:04d}{suffix}.png")
+        if step % cfg.log_img_interval == 0:
+            for suffix, model in [("", gen), ("_ema", gen_ema)]:
+                with autocast_ctx, torch.no_grad():
+                    fakes = model(fixed_zs)
+                fakes = fakes.cpu().view(10, 10, 3, 64, 64).permute(2, 0, 3, 1, 4).reshape(3, 640, 640)
+                fakes = unnormalize(fakes)
+                io.write_png(fakes, f"{log_img_dir}/step{step // 1000:04d}k{suffix}.png")
