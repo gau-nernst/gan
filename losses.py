@@ -7,10 +7,12 @@ def get_gan_loss(name: str):
     return {
         "gan": GAN,
         "wgan": WGAN,
+        "wgan-gp": WGAN_GP,
         "rgan": RGAN,
     }[name]
 
 
+# https://arxiv.org/abs/1406.2661
 class GAN:
     @staticmethod
     def d_loss(disc: nn.Module, reals: Tensor, fakes: Tensor) -> Tensor:
@@ -21,6 +23,7 @@ class GAN:
         return -F.logsigmoid(d_fakes).mean()
 
 
+# https://arxiv.org/abs/1701.07875
 class WGAN:
     @staticmethod
     def d_loss(disc: nn.Module, reals: Tensor, fakes: Tensor) -> Tensor:
@@ -34,6 +37,30 @@ class WGAN:
         return -d_fakes.mean()
 
 
+# https://arxiv.org/abs/1704.00028
+# https://github.com/igul222/improved_wgan_training
+class WGAN_GP:
+    @staticmethod
+    def d_loss(disc: nn.Module, reals: Tensor, fakes: Tensor) -> Tensor:
+        loss_d = -disc(reals).mean() + disc(fakes).mean()
+
+        # https://pytorch.org/docs/stable/notes/amp_examples.html#gradient-penalty
+        alpha = torch.rand(reals.shape[0], 1, 1, 1, device=reals.device)
+        interpolates = reals.lerp(fakes.detach(), alpha).requires_grad_()
+        d_interpolates = disc(interpolates)
+
+        with torch.autocast(enabled=False):
+            (d_grad,) = torch.autograd.grad(d_interpolates.sum(), interpolates, create_graph=True)
+
+        d_grad_norm = torch.linalg.vector_norm(d_grad.flatten(1), dim=1)
+        return loss_d + (d_grad_norm - 1).square().mean() * 10
+
+    @staticmethod
+    def g_loss(d_fakes: Tensor, disc: nn.Module, reals: Tensor) -> Tensor:
+        return -d_fakes.mean()
+
+
+# https://arxiv.org/abs/1807.00734
 class RGAN:
     @staticmethod
     def d_loss(disc: nn.Module, reals: Tensor, fakes: Tensor) -> Tensor:
