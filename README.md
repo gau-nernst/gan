@@ -9,6 +9,7 @@ Features:
   - [WGAN](https://arxiv.org/abs/1701.07875) and [WGAN-GP](https://arxiv.org/abs/1704.00028)
   - Hinge loss
   - [LSGAN](https://arxiv.org/abs/1611.04076)
+  - [Relativistic GAN](https://arxiv.org/abs/1807.00734)
 - GAN regularization:
   - WGAN: weight-clipping and gradient-penalty (WGAN-GP)
   - Spectral norm (SN-GAN)
