@@ -58,10 +58,10 @@ class WGAN_GP:
 
         # https://pytorch.org/docs/stable/notes/amp_examples.html#gradient-penalty
         alpha = torch.rand(reals.shape[0], 1, 1, 1, device=reals.device)
-        interpolates = reals.lerp(fakes.detach(), alpha).requires_grad_()
+        interpolates = reals.lerp(fakes.detach().float(), alpha).requires_grad_()
         d_interpolates = disc(interpolates)
 
-        with torch.autocast(enabled=False):
+        with torch.autocast(reals.device.type, enabled=False):
             (d_grad,) = torch.autograd.grad(d_interpolates.sum(), interpolates, create_graph=True)
 
         d_grad_norm = torch.linalg.vector_norm(d_grad.flatten(1), dim=1)
