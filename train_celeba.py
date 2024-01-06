@@ -111,7 +111,7 @@ if __name__ == "__main__":
     log_img_dir.mkdir(parents=True, exist_ok=True)
 
     step = 0  # generator update step
-    pbar = tqdm(total=cfg.n_iters)
+    pbar = tqdm(total=cfg.n_iters, dynamic_ncols=True)
     while step < cfg.n_iters:
         for _ in range(cfg.n_disc):
             reals, _ = next(dloader)
