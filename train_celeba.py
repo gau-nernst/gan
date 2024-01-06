@@ -23,6 +23,7 @@ def unnormalize(x: Tensor) -> Tensor:
 
 @dataclass
 class TrainConfig:
+    img_size: int = 64
     device: str = "cuda" if torch.cuda.is_available() else "cpu"
     mixed_precision: bool = False
     n_iters: int = 30_000
@@ -66,8 +67,8 @@ if __name__ == "__main__":
     for k, v in vars(cfg).items():
         print(f"  {k}: {v}")
 
-    disc = DcGanDiscriminator().to(cfg.device)
-    gen = DcGanGenerator().to(cfg.device)
+    disc = DcGanDiscriminator(img_size=cfg.img_size).to(cfg.device)
+    gen = DcGanGenerator(img_size=cfg.img_size).to(cfg.device)
     print(disc)
     print(gen)
 
@@ -81,8 +82,8 @@ if __name__ == "__main__":
     transform = v2.Compose(
         [
             v2.ToImage(),
-            v2.Resize(64, interpolation=v2.InterpolationMode.BICUBIC, antialias=True),
-            v2.CenterCrop(64),
+            v2.Resize(cfg.img_size, interpolation=v2.InterpolationMode.BICUBIC, antialias=True),
+            v2.CenterCrop(cfg.img_size),
             v2.ToDtype(torch.float32, scale=True),
             v2.Normalize([0.5, 0.5, 0.5], [0.5, 0.5, 0.5]),
         ]
@@ -133,6 +134,6 @@ if __name__ == "__main__":
             for suffix, model in [("", gen), ("_ema", gen_ema)]:
                 with autocast_ctx, torch.no_grad():
                     fakes = model(fixed_zs)
-                fakes = fakes.cpu().view(10, 10, 3, 64, 64).permute(2, 0, 3, 1, 4).reshape(3, 640, 640)
+                fakes = fakes.cpu().unflatten(0, (10, 10)).permute(2, 0, 3, 1, 4).flatten(1, 2).flatten(-2, -1)
                 fakes = unnormalize(fakes)
                 io.write_png(fakes, f"{log_img_dir}/step{step // 1000:04d}k{suffix}.png")
