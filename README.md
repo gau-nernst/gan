@@ -1,25 +1,28 @@
 # Generative Adversarial Networks (GANs)
 
+NOTE: I'm in the midst of re-writing the training script. Some of the commands below might not run correctly.
+
 Features:
 
 - GAN losses:
-  - Original GAN loss (non-saturating)
-  - WGAN and WGAN-GP
+  - [Original GAN loss](https://arxiv.org/abs/1406.2661) (non-saturating version i.e. replace `log(1-sigmoid(d(x)))` with `logsigmoid(-d(x))`)
+  - [WGAN](https://arxiv.org/abs/1701.07875) and [WGAN-GP](https://arxiv.org/abs/1704.00028)
   - Hinge loss
-  - Least square loss (LSGAN)
+  - [LSGAN](https://arxiv.org/abs/1611.04076)
+  - [Relativistic GAN](https://arxiv.org/abs/1807.00734)
 - GAN regularization:
   - WGAN: weight-clipping and gradient-penalty (WGAN-GP)
   - Spectral norm (SN-GAN)
   - R1 (StyleGAN, StyleGAN2)
   - TODO: path length regularization (StyleGAN2)
 - Architectures
-  - DCGAN
+  - [DCGAN](https://arxiv.org/abs/1511.06434)
   - Conditional GAN (modified for CNN)
   - NVIDIA GANs:
-    - Progressive GAN
-    - StyleGAN
-    - StyleGAN2
-  - SA-GAN
+    - [Progressive GAN](https://arxiv.org/pdf/1710.10196)
+    - [StyleGAN](https://arxiv.org/abs/1812.04948)
+    - [StyleGAN2](https://arxiv.org/abs/1912.04958)
+  - [SA-GAN](https://arxiv.org/pdf/1805.08318)
 - Img2Img:
   - Pix2Pix / CycleGAN: PatchGAN discriminator, Unet and ResNet generator
     - Dropout not included. Batch norm is replaced with Instance norm.
@@ -32,17 +35,25 @@ TODO:
 - AC-GAN
 - BigGAN
 
-Goodies:
+Notes in train script:
 
-- Mixed precision and distributed training is handled by [Accelerate](https://github.com/huggingface/accelerate) (distributed training is not regularly tested)
-- Logging with Tensorboard and W&B
+- For mixed precision training, only bf16 is supported (so that I don't need to use gradient scaler).
+- No multi-GPU support. (most GANs don't benefit from training at a larger batch size anyway)
 
 ## Usage
 
-Train DCGAN on MNIST, using hyperparameters specified in DCGAN paper (image size is fixed at 32x32)
+New script
 
 ```bash
-python gan_mnist.py --model dcgan --method gan --log_name mnist_dcgan --batch_size 32 --n_steps 100000 --lr 2e-4 --beta1 0.5 --beta2 0.999
+python train_celeba.py --run_name dcgan_celeba --lr 2e-5 --optimizer Adam --optimizer_kwargs '{"betas":[0.5,0.999]}' --batch_size 128 --mixed_precision
+python train_celeba.py --run_name dcgan_celeba_wgan --lr 5e-5 --optimizer RMSprop --batch_size 64 --n_disc 5 --method wgan --mixed_precision
+python train_celeba.py --run_name dcgan_celeba_wgan-gp --lr 1e-4 --optimizer Adam --optimizer_kwargs '{"betas":[0,0.9]}' --batch_size 64 --n_disc 5 --method wgan-gp
+```
+
+Train DCGAN on MNIST (28x28 padded to 32x32)
+
+```bash
+python train_mnist.py
 ```
 
 Add `--conditional` for conditional generation (using Conditional GAN. See `gan_mnist.py` for more details)
@@ -51,10 +62,10 @@ Unconditional generation | Conditional generation
 -------------------------|-----------------------
 <video src="https://user-images.githubusercontent.com/26946864/211148684-4e41a917-6459-408f-bd89-e99392ad918a.mp4"> | <video src="https://user-images.githubusercontent.com/26946864/211149361-368e77cb-584b-49fa-9b02-83f175abb422.mp4">
 
-Train DCGAN on CelebA to generate 64x64 images, same hyperparameters as above, with EMA
+Train DCGAN on CelebA (64x64)
 
 ```bash
-python gan_celeba.py --model dcgan --method gan --img_size 64 --log_name celeba_dcgan --batch_size 128 --n_steps 100000 --lr 2e-4 --beta1 0.5 --beta2 0.999 --ema
+python train_celeba.py --mixed_precision --log_dir images_celeba
 ```
 
 Without EMA | With EMA
@@ -85,34 +96,6 @@ CycleGAN
 python gan_img2img.py --dataset horse2zebra --model cyclegan --method lsgan --loggers tensorboard --log_name cyclegan_horse2zebra --beta1 0.5 --beta2 0.999 --lr_d 1e-3 --lr_g 2e-3 --batch_size 10 --mixed_precision fp16 --checkpoint_interval 20_000 --n_steps 25_000 --ema --compile
 ```
 
-### Usage with HF's Accelerate
-
-Run `accelerate config` to create a default configuration. Then you can launch as:
-
-```bash
-accelerate launch gan_celeba.py ...
-```
-
-Mixed-precision training
-
-```bash
-accelerate launch --mixed_precision fp16 gan_celeba.py ...
-```
-
-DDP training (w/ mixed-precision) (not so useful since GANs typically cannot use large batch size)
-
-```bash
-accelerate launch --num_processes 4 gan_celeba.py ...
-```
-
-With `torch.compile()` and mixed-precision training (there are some errors...)
-
-```bash
-accelerate launch --mixed_precision fp16 --dynamo_backend inductor gan_celeba.py ...
-```
-
-For other options, see `accelerate -h` or [here](https://huggingface.co/docs/accelerate/basic_tutorials/launch).
-
 ## Lessons
 
 General
@@ -126,7 +109,7 @@ General
   - For Generator, Batch norm should be in training mode during training, even when it generates samples for training Discriminator. During inference, if the batch size is large, Batch norm can be in training mode also. Generating single image (batch size 1) might be problematic.
   - I haven't explored other norm layers e.g. Layer norm, Instance norm, Adaptive Instance norm.
 - Training dynamics: GAN training depends on random seed, sometimes I can get better (or worse) results by repeating the same training. GAN training may become unstable / collapse after some time, so early stopping is required.
-- Generated images can get desaturated / washed-out after a while. It seems like this starts to happen when Discriminator loss becomes plateau. There doesn't seem any literature on this phenomenon.
+- Generated images can get desaturated / washed-out after a while. It seems like this starts to happen when Discriminator loss becomes plateau. There doesn't seem any literature on this phenomenon. (update: This was likely a bug in my previous implementation. If the discriminator has batch norm after its first convolution layer, it won't be able to tell the saturation in its input images. Removing the batch norm, as stated in DCGAN paper, seems to resolve this issue.)
 - Optimizer: most GANs use Adam with low `beta1` (0.5 or 0.0). Some GANs (WGAN-GP, NVIDIA GANs) require `beta1=0` for stable training. WGAN uses RMSprop. No one really explains this, but it is probably due to GAN training being a mini-max game between the Discrminator and Generator. Smoothing the gradients does not make sense (since the loss is not "stationary"). GANs also don't use weight decay.
 - Provide label information helps with GAN training. It is probably beneficial for multi-modal distributions, thus learning a mapping from N-d Gaussian to data distribution is easier. There are several approaches to this:
   - Conditional GAN (CGAN)
