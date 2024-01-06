@@ -8,9 +8,13 @@
 
 from torch import nn
 
+from .utils import get_norm
+
 
 class DcGanDiscriminator(nn.Sequential):
-    def __init__(self, img_channels: int = 3, img_size: int = 64, base_dim: int = 64, depth: int = 4) -> None:
+    def __init__(
+        self, img_channels: int = 3, img_size: int = 64, base_dim: int = 64, depth: int = 4, norm: str = "bn"
+    ) -> None:
         # no bn in the first conv layer
         super().__init__(
             nn.Conv2d(img_channels, base_dim, 4, 2, 1),
@@ -20,7 +24,7 @@ class DcGanDiscriminator(nn.Sequential):
 
         for _ in range(depth - 1):
             self.append(nn.Conv2d(in_ch, in_ch * 2, 4, 2, 1))
-            self.append(nn.BatchNorm2d(in_ch * 2, track_running_stats=False))
+            self.append(get_norm(in_ch * 2, norm))
             self.append(nn.LeakyReLU(0.2, inplace=True))
             in_ch *= 2
 
@@ -35,7 +39,13 @@ class DcGanDiscriminator(nn.Sequential):
 
 class DcGanGenerator(nn.Sequential):
     def __init__(
-        self, img_channels: int = 3, img_size: int = 64, base_dim: int = 64, depth: int = 4, z_dim: int = 128
+        self,
+        img_channels: int = 3,
+        img_size: int = 64,
+        base_dim: int = 64,
+        depth: int = 4,
+        z_dim: int = 128,
+        norm: str = "bn",
     ) -> None:
         out_ch = base_dim * 2 ** (depth - 1)
 
@@ -43,7 +53,7 @@ class DcGanGenerator(nn.Sequential):
         super().__init__(
             nn.Unflatten(-1, (z_dim, 1, 1)),
             nn.ConvTranspose2d(z_dim, out_ch, img_size // 2**depth),
-            nn.BatchNorm2d(out_ch, track_running_stats=False),
+            get_norm(out_ch, norm),
             nn.ReLU(inplace=True),
         )
         in_ch = out_ch
@@ -51,7 +61,7 @@ class DcGanGenerator(nn.Sequential):
         # conv transpose until reaching image size / 2
         for _ in range(depth - 1):
             self.append(nn.ConvTranspose2d(in_ch, in_ch // 2, 4, 2, 1))
-            self.append(nn.BatchNorm2d(in_ch // 2, track_running_stats=False))
+            self.append(get_norm(in_ch // 2, norm))
             self.append(nn.ReLU(inplace=True))
             in_ch //= 2
 
