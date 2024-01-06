@@ -1,8 +1,8 @@
 # SA-GAN - https://arxiv.org/pdf/1805.08318
 # self-attention in SA-GAN is mostly identical to multi-head attention in ViT
 # - single head (instead of multi-head)
-# - no scaling factor 1/√dk
-# - q, k, v have bottlenecked embedding dimension
+# - no scaling factor 1/sqrt(dk)
+# - q, k, v have reduced embedding dimension
 # - k and v have reduced spatial resolution
 #
 # For conditional generation
@@ -13,85 +13,57 @@
 # https://github.com/brain-research/self-attention-gan
 # https://github.com/ajbrock/BigGAN-PyTorch
 
-from functools import partial
-from typing import Callable, List, Optional
-
 import torch
+import torch.nn.functional as F
 from torch import Tensor, nn
-
-from .base import _Act, conv1x1, conv3x3, relu
-
-
-_Layer = Callable[[int, int], nn.Module]
 
 
 class ConditionalBatchNorm2d(nn.Module):
-    def __init__(self, dim: int, y_dim: Optional[int] = None, y_layer_factory: _Layer = nn.Embedding):
+    def __init__(self, dim: int, n_classes: int = 1, eps: float = 1e-5) -> None:
         super().__init__()
-        self.bn = nn.BatchNorm2d(dim, affine=y_dim is None, track_running_stats=False)
-        self.weight = y_layer_factory(y_dim, dim) if y_dim is not None else None
-        self.bias = y_layer_factory(y_dim, dim) if y_dim is not None else None
+        self.weight = nn.Embedding(n_classes, dim)
+        self.bias = nn.Embedding(n_classes, dim)
+        self.eps = eps
 
-    def forward(self, imgs: Tensor, ys: Tensor):
-        imgs = self.bn(imgs)
-        if self.weight is not None and self.bias is not None:
-            b = imgs.shape[0]
-            weight = self.weight(ys).view(b, -1, 1, 1)
-            bias = self.bias(ys).view(b, -1, 1, 1)
-            imgs = imgs * weight + bias
-        return imgs
+    def forward(self, x: Tensor, y: Tensor) -> Tensor:
+        return F.batch_norm(x, None, None, self.weight(y), self.bias(y), True, 0.0, self.eps)
 
 
-class SelfAttentionConv2d(nn.Module):
-    def __init__(self, in_dim: int, qk_ratio: int = 8, v_ratio: int = 2):
-        assert in_dim % qk_ratio == 0 and in_dim % v_ratio == 0
+class SelfAttention2d(nn.Module):
+    def __init__(self, in_dim: int) -> None:
         super().__init__()
-        self.qkv_sizes = [in_dim // qk_ratio] * 2 + [in_dim // v_ratio]
-        self.qkv_conv = conv1x1(in_dim, sum(self.qkv_sizes), bias=False)
-        self.out_conv = conv1x1(self.qkv_sizes[2], in_dim, bias=False)
-        self.scale = nn.Parameter(torch.tensor(0.0))
+        self.q_proj = nn.Conv2d(in_dim, in_dim // 8, 1, bias=False)
+        self.k_proj = nn.Conv2d(in_dim, in_dim // 8, 1, bias=False)
+        self.v_proj = nn.Conv2d(in_dim, in_dim // 2, 1, bias=False)
+        self.out_proj = nn.Conv2d(in_dim // 2, in_dim, 1, bias=False)
+        self.scale = nn.Parameter(torch.tensor(0.0))  # layer scale
         self.max_pool = nn.MaxPool2d(2)
-        self.flatten = nn.Flatten(start_dim=2)
 
-    def forward(self, imgs: Tensor):
-        b, _, h, w = imgs.shape
-        q, k, v = self.qkv_conv(imgs).split(self.qkv_sizes, dim=1)
-        k, v = map(self.max_pool, (k, v))
-        q, k, v = map(self.flatten, (q, k, v))
+    def forward(self, x: Tensor) -> Tensor:
+        q = self.q_proj(x).flatten(-2).transpose(-1, -2)
+        k = self.max_pool(self.k_proj(x)).flatten(-2).transpose(-1, -2)
+        v = self.max_pool(self.v_proj(x)).flatten(-2).transpose(-1, -2)
 
-        # NOTE: (softmax(Q @ K^T) @ V)^T = V^T @ softmax(Q K^T)^T
-        attn = q.transpose(1, 2).bmm(k).softmax(dim=2)  # (hw, c) @ (c, hw/4) -> (hw, hw/4)
-        out = v.bmm(attn.transpose(1, 2))  # (c, hw/4) @ (hw/4, hw) -> (c, hw)
-        return imgs + self.out_conv(out.view(b, -1, h, w)) * self.scale
+        out = F.scaled_dot_product_attention(q, k, v)  # original code doesn't use 1/sqrt(dk)
+        out = out.transpose(-1, -2).unflatten(-1, x.shape[-2:])
+        return x + self.out_proj(out) * self.scale
 
 
 class SAGANDiscriminatorBlock(nn.Module):
-    def __init__(
-        self,
-        in_dim: int,
-        out_dim: int,
-        first_block: bool = False,
-        downsample: bool = True,
-        act: _Act = relu,
-    ):
+    def __init__(self, in_dim: int, out_dim: int, first_block: bool = False) -> None:
         super().__init__()
-        self.layers = nn.Sequential(
-            nn.Identity() if first_block else act(),
-            conv3x3(in_dim, out_dim),
-            act(),
-            conv3x3(out_dim, out_dim),
-            nn.AvgPool2d(2) if downsample else nn.Identity(),
+        self.residual = nn.Sequential(
+            nn.Identity() if first_block else nn.ReLU(inplace=True),
+            nn.Conv2d(in_dim, out_dim, 3, 1, 1),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(out_dim, out_dim, 3, 1, 1),
+            nn.AvgPool2d(2),
         )
         # avg_pool + 1x1 conv is equivalent to 1x1 conv + avg_pool, but the former is faster
-        if downsample:
-            self.shortcut = nn.Sequential(nn.AvgPool2d(2), conv1x1(in_dim, out_dim))
-        elif out_dim != in_dim:
-            self.shortcut = conv1x1(in_dim, out_dim)
-        else:
-            self.shortcut = nn.Identity()
+        self.shortcut = nn.Sequential(nn.AvgPool2d(2), nn.Conv2d(in_dim, out_dim, 1))
 
-    def forward(self, imgs: Tensor):
-        return self.layers(imgs) + self.shortcut(imgs)
+    def forward(self, x: Tensor) -> Tensor:
+        return self.residual(x) + self.shortcut(x)
 
 
 class SAGANDiscriminator(nn.Module):
@@ -99,81 +71,74 @@ class SAGANDiscriminator(nn.Module):
         self,
         img_size: int,
         img_channels: int,
-        y_dim: Optional[int] = None,
-        smallest_map_size: int = 4,
+        n_classes: int = 1,
         base_depth: int = 32,
-        self_attention_sizes: Optional[List[int]] = None,
-        y_layer_factory: _Layer = nn.Embedding,
-        act: _Act = relu,
-    ):
-        if self_attention_sizes is None:
-            self_attention_sizes = [32]
+        self_attn_sizes: list[int] | None = None,
+    ) -> None:
+        if self_attn_sizes is None:
+            self_attn_sizes = [32]
         super().__init__()
-        block = partial(SAGANDiscriminatorBlock, act=act)
-        self.layers = nn.Sequential()
-        self.layers.append(block(img_channels, base_depth, first_block=True))
+        self.blocks = nn.Sequential()
+        self.blocks.append(SAGANDiscriminatorBlock(img_channels, base_depth, first_block=True))
         img_size //= 2
 
-        while img_size > smallest_map_size:
-            self.layers.append(block(base_depth, base_depth * 2))
+        if img_size in self_attn_sizes:
+            self.blocks.append(SelfAttention2d(base_depth))
+
+        while img_size > 4:
+            self.blocks.append(SAGANDiscriminatorBlock(base_depth, base_depth * 2))
             base_depth *= 2
             img_size //= 2
 
-            if img_size in self_attention_sizes:
-                self.layers.append(SelfAttentionConv2d(base_depth))
+            if img_size in self_attn_sizes:
+                self.blocks.append(SelfAttention2d(base_depth))
 
-        self.layers.append(block(base_depth, base_depth, downsample=False))
-        self.layers.append(act())
-        self.layers.append(nn.AvgPool2d(4))  # official implementation uses sum
-
-        self.y_layer = y_layer_factory(y_dim, base_depth) if y_dim is not None else None
-        self.out_layer = conv1x1(base_depth, 1)
+        self.blocks.append(
+            nn.Sequential(
+                nn.ReLU(inplace=True),
+                nn.Conv2d(base_depth, base_depth, 3, 1, 1),
+                nn.ReLU(inplace=True),
+                nn.Conv2d(base_depth, base_depth, 3, 1, 1),
+                nn.ReLU(inplace=True),
+            )
+        )
+        self.y_proj = nn.Embedding(n_classes, base_depth)
+        self.bias = nn.Parameter(torch.zeros(base_depth))
 
         self.reset_parameters()
 
     def reset_parameters(self):
         self.apply(init_weights)
 
-    def forward(self, imgs: Tensor, ys: Optional[Tensor] = None):
-        embs = self.layers(imgs)
-        logits = self.out_layer(embs).view(-1)
-        if self.y_layer is not None:  # projection Discriminator
-            b = imgs.shape[0]
-            y_logits = torch.bmm(embs.view(b, 1, -1), self.y_layer(ys).view(b, -1, 1))
-            logits = logits + y_logits.view(b)
-        return logits
+    def forward(self, x: Tensor, y: Tensor | None = None) -> Tensor:
+        if y is None:
+            y = x.new_zeros(1, dtype=torch.long)
+        embs = self.blocks(x).sum(dim=(-1, -2))
+        return (embs * (self.y_proj(y) + self.bias)).sum(1)
 
 
 class SAGANGeneratorStage(nn.Module):
-    def __init__(
-        self,
-        in_dim: int,
-        out_dim: int,
-        y_dim: Optional[int] = None,
-        y_layer_factory: _Layer = nn.Embedding,
-        act: _Act = relu,
-    ):
+    def __init__(self, in_dim: int, out_dim: int, n_classes: int) -> None:
         super().__init__()
-        norm = partial(ConditionalBatchNorm2d, y_dim=y_dim, y_layer_factory=y_layer_factory)
-        self.layers = nn.ModuleList()
-
-        self.layers.append(norm(in_dim))
-        self.layers.append(act())
-        self.layers.append(nn.Upsample(scale_factor=2.0))
-        self.layers.append(conv3x3(in_dim, out_dim, bias=False))
-
-        self.layers.append(norm(out_dim))
-        self.layers.append(act())
-        self.layers.append(conv3x3(out_dim, out_dim))
+        residual = [
+            ConditionalBatchNorm2d(in_dim, n_classes),
+            nn.ReLU(inplace=True),
+            nn.Upsample(scale_factor=2.0),
+            nn.Conv2d(in_dim, out_dim, 3, 1, 1, bias=False),
+            ConditionalBatchNorm2d(out_dim, n_classes),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(out_dim, out_dim, 3, 1, 1),
+        ]
+        self.residual = nn.ModuleList(residual)
 
         # 1x1 conv + upsample is equivalent to upsample + 1x1 conv, but the former is faster
-        self.shortcut = nn.Sequential(conv1x1(in_dim, out_dim), nn.Upsample(scale_factor=2.0))
+        self.shortcut = nn.Sequential(nn.Conv2d(in_dim, out_dim, 1), nn.Upsample(scale_factor=2.0))
 
-    def forward(self, imgs: Tensor, ys: Optional[Tensor] = None):
-        shortcut = self.shortcut(imgs)
-        for layer in self.layers:
-            imgs = layer(imgs, ys) if isinstance(layer, ConditionalBatchNorm2d) else layer(imgs)
-        return imgs + shortcut
+    def forward(self, x: Tensor, y: Tensor) -> Tensor:
+        shortcut = self.shortcut(x)
+        for layer in self.residual:
+            x = layer(x, y) if isinstance(layer, ConditionalBatchNorm2d) else layer(x)
+        return x + shortcut
 
 
 class SAGANGenerator(nn.Module):
@@ -182,44 +147,47 @@ class SAGANGenerator(nn.Module):
         img_size: int,
         img_channels: int,
         z_dim: int,
-        y_dim: Optional[int] = None,
+        n_classes: int = 1,
         smallest_map_size: int = 4,
         base_depth: int = 32,
-        self_attention_sizes: Optional[List[int]] = None,
-        y_layer_factory: _Layer = nn.Embedding,
-        act: _Act = relu,
-    ):
+        self_attention_sizes: list[int] | None = None,
+    ) -> None:
         self_attention_sizes = self_attention_sizes or [32]
         super().__init__()
-        stage = partial(SAGANGeneratorStage, y_dim=y_dim, y_layer_factory=y_layer_factory, act=act)
         depth = base_depth * img_size // smallest_map_size // 2
 
         self.layers = nn.ModuleList()
         self.layers.append(nn.ConvTranspose2d(z_dim, depth, smallest_map_size))
         in_depth = depth
         while smallest_map_size < img_size:
-            self.layers.append(stage(in_depth, depth))
+            self.layers.append(SAGANGeneratorStage(in_depth, depth, n_classes))
             in_depth = depth
             depth //= 2
             smallest_map_size *= 2
 
             if smallest_map_size in self_attention_sizes:
-                self.layers.append(SelfAttentionConv2d(in_depth))
+                self.layers.append(SelfAttention2d(in_depth))
 
-        self.layers.append(nn.BatchNorm2d(in_depth))
-        self.layers.append(act())
-        self.layers.append(conv3x3(in_depth, img_channels))
-        self.layers.append(nn.Tanh())
+        self.layers.append(
+            nn.Sequential(
+                nn.BatchNorm2d(in_depth),
+                nn.ReLU(inplace=True),
+                nn.Conv2d(in_depth, img_channels, 3, 1, 1),
+                nn.Tanh(),
+            )
+        )
 
         self.reset_parameters()
 
     def reset_parameters(self):
         self.apply(init_weights)
 
-    def forward(self, z_embs: Tensor, ys: Optional[Tensor] = None):
-        out = z_embs.view(*z_embs.shape, 1, 1)
+    def forward(self, z: Tensor, y: Tensor | None = None) -> Tensor:
+        if y is None:
+            y = z.new_zeros(1, dtype=torch.long)
+        out = z.unflatten(-1, (-1, 1, 1))
         for layer in self.layers:
-            out = layer(out, ys) if isinstance(layer, SAGANGeneratorStage) else layer(out)
+            out = layer(out, y) if isinstance(layer, SAGANGeneratorStage) else layer(out)
         return out
 
 
@@ -228,3 +196,4 @@ def init_weights(module: nn.Module):
         nn.init.xavier_uniform_(module.weight)
         if module.bias is not None:
             nn.init.zeros_(module.bias)
+    # TODO: nn.Embedding
