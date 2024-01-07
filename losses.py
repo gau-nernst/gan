@@ -9,6 +9,7 @@ def get_gan_loss(name: str):
         "lsgan": LSGAN,
         "wgan": WGAN,
         "wgan-gp": WGAN_GP,
+        "hinge": HingeLoss,
         "rgan": RGAN,
     }[name]
 
@@ -36,6 +37,7 @@ class LSGAN:
 
 
 # https://arxiv.org/abs/1701.07875
+# https://github.com/martinarjovsky/WassersteinGAN
 class WGAN:
     @staticmethod
     def d_loss(disc: nn.Module, reals: Tensor, fakes: Tensor) -> Tensor:
@@ -67,12 +69,23 @@ class WGAN_GP:
         d_grad_norm = torch.linalg.vector_norm(d_grad.flatten(1), dim=1)
         return loss_d + (d_grad_norm - 1).square().mean() * 10
 
+    g_loss = WGAN.g_loss
+
+
+# https://arxiv.org/abs/1802.05957
+# https://github.com/pfnet-research/sngan_projection
+# Although it is often cited as from https://arxiv.org/abs/1705.02894,
+# the exact form used is from SNGAN
+class HingeLoss:
     @staticmethod
-    def g_loss(d_fakes: Tensor, disc: nn.Module, reals: Tensor) -> Tensor:
-        return -d_fakes.mean()
+    def d_loss(disc: nn.Module, reals: Tensor, fakes: Tensor) -> Tensor:
+        return F.relu(1 - disc(reals), inplace=True) + F.relu(1 + disc(fakes), inplace=True)
+
+    g_loss = WGAN.g_loss
 
 
 # https://arxiv.org/abs/1807.00734
+# https://github.com/AlexiaJM/RelativisticGAN
 class RGAN:
     @staticmethod
     def d_loss(disc: nn.Module, reals: Tensor, fakes: Tensor) -> Tensor:
