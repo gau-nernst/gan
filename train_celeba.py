@@ -30,8 +30,11 @@ def apply_spectral_norm(m: nn.Module):
 @dataclass
 class TrainConfig:
     img_size: int = 64
+    disc_kwargs: dict = field(default_factory=dict)
+    gen_kwargs: dict = field(default_factory=dict)
     sn_disc: bool = False
     sn_gen: bool = False
+
     device: str = "cuda" if torch.cuda.is_available() else "cpu"
     mixed_precision: bool = False
     n_iters: int = 30_000
@@ -41,6 +44,7 @@ class TrainConfig:
     optimizer_kwargs: dict = field(default_factory=dict)
     batch_size: int = 128
     method: str = "gan"
+
     run_name: str = "dcgan_celeba"
     log_img_interval: int = 1_000
 
@@ -75,8 +79,8 @@ if __name__ == "__main__":
     for k, v in vars(cfg).items():
         print(f"  {k}: {v}")
 
-    disc = DcGanDiscriminator(img_size=cfg.img_size, norm="none" if cfg.method == "wgan-gp" else "bn").to(cfg.device)
-    gen = DcGanGenerator(img_size=cfg.img_size).to(cfg.device)
+    disc = DcGanDiscriminator(img_size=cfg.img_size, **cfg.disc_kwargs).to(cfg.device)
+    gen = DcGanGenerator(img_size=cfg.img_size, **cfg.gen_kwargs).to(cfg.device)
     if cfg.sn_disc:
         disc.apply(apply_spectral_norm)
     if cfg.sn_gen:
