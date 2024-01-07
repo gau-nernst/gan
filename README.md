@@ -11,7 +11,6 @@ Features:
   - [LSGAN](https://arxiv.org/abs/1611.04076)
   - [Relativistic GAN](https://arxiv.org/abs/1807.00734)
 - GAN regularization:
-  - WGAN: weight-clipping and gradient-penalty (WGAN-GP)
   - Spectral norm (SN-GAN)
   - R1 (StyleGAN, StyleGAN2)
   - TODO: path length regularization (StyleGAN2)
@@ -47,7 +46,7 @@ New script
 ```bash
 python train_celeba.py --run_name dcgan_celeba --lr 2e-5 --optimizer Adam --optimizer_kwargs '{"betas":[0.5,0.999]}' --batch_size 128 --mixed_precision
 python train_celeba.py --run_name dcgan_celeba_wgan --lr 5e-5 --optimizer RMSprop --batch_size 64 --n_disc 5 --method wgan --mixed_precision
-python train_celeba.py --run_name dcgan_celeba_wgan-gp --lr 1e-4 --optimizer Adam --optimizer_kwargs '{"betas":[0,0.9]}' --batch_size 64 --n_disc 5 --method wgan-gp
+python train_celeba.py --run_name dcgan_celeba_wgan-gp --lr 1e-4 --optimizer Adam --optimizer_kwargs '{"betas":[0,0.9]}' --batch_size 64 --n_disc 5 --method wgan-gp --mixed_precision
 ```
 
 Train DCGAN on MNIST (28x28 padded to 32x32)

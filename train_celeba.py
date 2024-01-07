@@ -68,7 +68,7 @@ if __name__ == "__main__":
     for k, v in vars(cfg).items():
         print(f"  {k}: {v}")
 
-    disc = DcGanDiscriminator(img_size=cfg.img_size).to(cfg.device)
+    disc = DcGanDiscriminator(img_size=cfg.img_size, norm="none" if cfg.method == "wgan-gp" else "bn").to(cfg.device)
     gen = DcGanGenerator(img_size=cfg.img_size).to(cfg.device)
     print(disc)
     print(gen)
