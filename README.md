@@ -7,11 +7,10 @@ Features:
 - GAN losses:
   - [Original GAN loss](https://arxiv.org/abs/1406.2661) (non-saturating version i.e. replace `log(1-sigmoid(d(x)))` with `logsigmoid(-d(x))`)
   - [WGAN](https://arxiv.org/abs/1701.07875) and [WGAN-GP](https://arxiv.org/abs/1704.00028)
-  - Hinge loss
+  - [Hinge loss](https://arxiv.org/abs/1802.05957)
   - [LSGAN](https://arxiv.org/abs/1611.04076)
   - [Relativistic GAN](https://arxiv.org/abs/1807.00734)
 - GAN regularization:
-  - WGAN: weight-clipping and gradient-penalty (WGAN-GP)
   - Spectral norm (SN-GAN)
   - R1 (StyleGAN, StyleGAN2)
   - TODO: path length regularization (StyleGAN2)
@@ -47,8 +46,15 @@ New script
 ```bash
 python train_celeba.py --run_name dcgan_celeba --lr 2e-5 --optimizer Adam --optimizer_kwargs '{"betas":[0.5,0.999]}' --batch_size 128 --mixed_precision
 python train_celeba.py --run_name dcgan_celeba_wgan --lr 5e-5 --optimizer RMSprop --batch_size 64 --n_disc 5 --method wgan --mixed_precision
-python train_celeba.py --run_name dcgan_celeba_wgan-gp --lr 1e-4 --optimizer Adam --optimizer_kwargs '{"betas":[0,0.9]}' --batch_size 64 --n_disc 5 --method wgan-gp
+python train_celeba.py --run_name dcgan_celeba_wgan-gp --disc_kwargs '{"norm":"none"}' --lr 1e-4 --optimizer Adam --optimizer_kwargs '{"betas":[0,0.9]}' --batch_size 64 --n_disc 5 --method wgan-gp --mixed_precision
+python train_celeba.py --run_name dcgan_celeba_sngan --disc_kwargs '{"norm":"none"}' --sn_disc --lr 1e-4 --optimizer Adam --optimizer_kwargs '{"betas":[0.5,0.999]}' --batch_size 64 --method hinge --mixed_precision
+python train_celeba.py --run_name dcgan_celeba_rgan --lr 2e-4 --optimizer Adam --optimizer_kwargs '{"betas":[0.5,0.999]}' --batch_size 64 --method rgan --mixed_precision
+python train_celeba.py --run_name dcgan_celeba_sagan --model sagan --sn_disc --sn_gen --lr 2e-4 --optimizer Adam --optimizer_kwargs '{"betas":[0,0.9]}' --batch_size 256 --method hinge --mixed_precision
 ```
+
+NOTE:
+- SN-GAN didn't exactly use DCGAN architecture.
+- SAGAN uses different learning rates for Generator (1e-4) and Discriminator (4e-4). 
 
 Train DCGAN on MNIST (28x28 padded to 32x32)
 

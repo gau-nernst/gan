@@ -6,7 +6,7 @@ from pathlib import Path
 
 import torch
 import wandb
-from torch import Tensor
+from torch import Tensor, nn
 from torch.utils.data import DataLoader
 from torchvision import datasets, io
 from torchvision.transforms import v2
@@ -15,16 +15,27 @@ from tqdm import tqdm
 from ema import EMA
 from fid import FID
 from losses import get_gan_loss
-from modelling.dcgan import DcGanDiscriminator, DcGanGenerator
+from modelling import build_discriminator, build_generator
 
 
 def unnormalize(x: Tensor) -> Tensor:
     return ((x * 0.5 + 0.5) * 255).round().to(torch.uint8)
 
 
+def apply_spectral_norm(m: nn.Module):
+    if isinstance(m, (nn.Linear, nn.modules.conv._ConvNd, nn.Embedding)):
+        nn.utils.parametrizations.spectral_norm(m)
+
+
 @dataclass
 class TrainConfig:
+    model: str = "dcgan"
     img_size: int = 64
+    disc_kwargs: dict = field(default_factory=dict)
+    gen_kwargs: dict = field(default_factory=dict)
+    sn_disc: bool = False
+    sn_gen: bool = False
+
     device: str = "cuda" if torch.cuda.is_available() else "cpu"
     mixed_precision: bool = False
     n_iters: int = 30_000
@@ -32,8 +43,9 @@ class TrainConfig:
     lr: float = 2e-4
     optimizer: str = "Adam"
     optimizer_kwargs: dict = field(default_factory=dict)
-    batch_size: int = 128
+    batch_size: int = 64
     method: str = "gan"
+
     run_name: str = "dcgan_celeba"
     log_img_interval: int = 1_000
 
@@ -68,8 +80,13 @@ if __name__ == "__main__":
     for k, v in vars(cfg).items():
         print(f"  {k}: {v}")
 
-    disc = DcGanDiscriminator(img_size=cfg.img_size).to(cfg.device)
-    gen = DcGanGenerator(img_size=cfg.img_size).to(cfg.device)
+    disc = build_discriminator(cfg.model, img_size=cfg.img_size, **cfg.disc_kwargs).to(cfg.device)
+    gen = build_generator(cfg.model, img_size=cfg.img_size, **cfg.gen_kwargs).to(cfg.device)
+    if cfg.sn_disc:
+        disc.apply(apply_spectral_norm)
+    if cfg.sn_gen:
+        gen.apply(apply_spectral_norm)
+
     print(disc)
     print(gen)
 

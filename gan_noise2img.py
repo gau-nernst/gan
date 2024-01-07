@@ -9,7 +9,7 @@ import torchvision.transforms as TT
 from torch import Tensor, nn
 from torch.utils.data import DataLoader
 
-from modelling import get_discriminator_cls, get_generator_cls
+from modelling import build_discriminator, build_generator
 from training import BaseTrainer, BaseTrainerConfig, compute_d_loss, compute_g_loss
 from utils import add_args_from_cls, cls_from_args
 
@@ -40,29 +40,32 @@ def build_model(args: argparse.Namespace):
             fade_duration=args.fade_duration,
         )
 
-    d_cls = get_discriminator_cls(args.model)
-    g_cls = get_generator_cls(args.model)
-
     if args.model == "sagan":
         if args.conditional:
             kwargs.update(y_dim=y_dim, y_layer_factory=y_encoder)
-        dis = d_cls(**kwargs)
-        gen = g_cls(**kwargs, z_dim=args.z_dim)
+        dis = build_discriminator(args.model, **kwargs)
+        gen = build_generator(args.model, z_dim=args.z_dim, **kwargs)
 
     elif args.model in ("dcgan", "progressive_gan", "stylegan", "stylegan2"):
         if args.conditional:
             yemb_dim = 128
-            dis = get_discriminator_cls("cgan")(
-                d_cls(**kwargs, img_channels=kwargs["img_channels"] + yemb_dim),
+            dis = build_discriminator(
+                "cgan",
+                build_discriminator(
+                    args.model,
+                    img_channels=kwargs["img_channels"] + yemb_dim,
+                    **kwargs,
+                ),
                 y_encoder(y_dim, yemb_dim),
             )
-            gen = get_generator_cls("cgan")(
-                g_cls(**kwargs, z_dim=args.z_dim + yemb_dim),
+            gen = build_generator(
+                "cgan",
+                build_generator(args.model, z_dim=args.z_dim + yemb_dim, **kwargs),
                 y_encoder(y_dim, yemb_dim),
             )
         else:
-            dis = d_cls(**kwargs)
-            gen = g_cls(**kwargs)
+            dis = build_discriminator(args.model, **kwargs)
+            gen = build_generator(args.model, z_dim=args.z_dim, **kwargs)
 
     else:
         raise ValueError(f"Unsupported model {args.model}")
