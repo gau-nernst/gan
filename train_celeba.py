@@ -15,8 +15,7 @@ from tqdm import tqdm
 from ema import EMA
 from fid import FID
 from losses import get_gan_loss
-from modelling.dcgan import DcGanDiscriminator, DcGanGenerator
-from modelling.sagan import SaGanDiscriminator, SaGanGenerator
+from modelling import build_discriminator, build_generator
 
 
 def unnormalize(x: Tensor) -> Tensor:
@@ -30,6 +29,7 @@ def apply_spectral_norm(m: nn.Module):
 
 @dataclass
 class TrainConfig:
+    model: str = "dcgan"
     img_size: int = 64
     disc_kwargs: dict = field(default_factory=dict)
     gen_kwargs: dict = field(default_factory=dict)
@@ -80,10 +80,8 @@ if __name__ == "__main__":
     for k, v in vars(cfg).items():
         print(f"  {k}: {v}")
 
-    # disc = DcGanDiscriminator(img_size=cfg.img_size, **cfg.disc_kwargs).to(cfg.device)
-    # gen = DcGanGenerator(img_size=cfg.img_size, **cfg.gen_kwargs).to(cfg.device)
-    disc = SaGanDiscriminator(img_size=cfg.img_size, **cfg.disc_kwargs).to(cfg.device)
-    gen = SaGanGenerator(img_size=cfg.img_size, **cfg.gen_kwargs).to(cfg.device)
+    disc = build_discriminator(cfg.model, img_size=cfg.img_size, **cfg.disc_kwargs).to(cfg.device)
+    gen = build_generator(cfg.model, img_size=cfg.img_size, **cfg.gen_kwargs).to(cfg.device)
     if cfg.sn_disc:
         disc.apply(apply_spectral_norm)
     if cfg.sn_gen:

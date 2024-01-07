@@ -10,7 +10,7 @@ from .stylegan import StyleGANDiscriminator, StyleGANGenerator
 from .stylegan2 import StyleGAN2Discriminator, StyleGAN2Generator
 
 
-def get_generator_cls(name: str):
+def build_generator(name: str, *args, **kwargs):
     return dict(
         dcgan=DcGanGenerator,
         progressive_gan=ProgressiveGANGenerator,
@@ -22,10 +22,10 @@ def get_generator_cls(name: str):
         cyclegan=ResNetGenerator,
         srgan=SRResNet,
         esrgan=ESRGANGenerator,
-    )[name]
+    )[name](*args, **kwargs)
 
 
-def get_discriminator_cls(name: str):
+def build_discriminator(name: str, *args, **kwargs):
     return dict(
         dcgan=DcGanDiscriminator,
         progressive_gan=ProgressiveGANDiscriminator,
@@ -36,4 +36,4 @@ def get_discriminator_cls(name: str):
         pix2pix=PatchGAN,
         cyclegan=PatchGAN,
         srgan=SRGANDiscriminator,
-    )[name]
+    )[name](*args, **kwargs)
