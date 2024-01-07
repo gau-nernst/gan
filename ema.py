@@ -6,12 +6,7 @@ from torch import nn
 
 # reference: https://github.com/lucidrains/ema-pytorch
 class EMA(nn.Module):
-    def __init__(
-        self,
-        model: nn.Module,
-        beta: float = 0.999,
-        warmup: int = 100,
-    ):
+    def __init__(self, model: nn.Module, beta: float = 0.999, warmup: int = 100) -> None:
         super().__init__()
         self.ema_model = copy.deepcopy(model)
         self.model = [model]

@@ -16,6 +16,7 @@ from ema import EMA
 from fid import FID
 from losses import get_gan_loss
 from modelling.dcgan import DcGanDiscriminator, DcGanGenerator
+from modelling.sagan import SaGanDiscriminator, SaGanGenerator
 
 
 def unnormalize(x: Tensor) -> Tensor:
@@ -42,7 +43,7 @@ class TrainConfig:
     lr: float = 2e-4
     optimizer: str = "Adam"
     optimizer_kwargs: dict = field(default_factory=dict)
-    batch_size: int = 128
+    batch_size: int = 64
     method: str = "gan"
 
     run_name: str = "dcgan_celeba"
@@ -79,8 +80,10 @@ if __name__ == "__main__":
     for k, v in vars(cfg).items():
         print(f"  {k}: {v}")
 
-    disc = DcGanDiscriminator(img_size=cfg.img_size, **cfg.disc_kwargs).to(cfg.device)
-    gen = DcGanGenerator(img_size=cfg.img_size, **cfg.gen_kwargs).to(cfg.device)
+    # disc = DcGanDiscriminator(img_size=cfg.img_size, **cfg.disc_kwargs).to(cfg.device)
+    # gen = DcGanGenerator(img_size=cfg.img_size, **cfg.gen_kwargs).to(cfg.device)
+    disc = SaGanDiscriminator(img_size=cfg.img_size, **cfg.disc_kwargs).to(cfg.device)
+    gen = SaGanGenerator(img_size=cfg.img_size, **cfg.gen_kwargs).to(cfg.device)
     if cfg.sn_disc:
         disc.apply(apply_spectral_norm)
     if cfg.sn_gen:
