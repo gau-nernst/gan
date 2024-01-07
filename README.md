@@ -50,6 +50,8 @@ python train_celeba.py --run_name dcgan_celeba_wgan-gp --disc_kwargs '{"norm":"n
 python train_celeba.py --run_name dcgan_celeba_sngan --disc_kwargs '{"norm":"none"}' --lr 1e-4 --optimizer Adam --optimizer_kwargs '{"betas":[0.5,0.999]}' --batch_size 64 --method hinge --sn_disc --mixed_precision
 ```
 
+NOTE: SN-GAN didn't exactly use DCGAN architecture.
+
 Train DCGAN on MNIST (28x28 padded to 32x32)
 
 ```bash
