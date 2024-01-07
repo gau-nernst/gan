@@ -65,7 +65,7 @@ DCGAN | WGAN | 64 | 1h 7m | 28.86
 DCGAN | WGAN-GP | 64 | 1h 10m | 17.33 | No bn in discriminator
 DCGAN | Hinge | 64 | 33m | 22.90 | (SN-GAN) No bn in discriminator. Spectral norm in discriminator
 DCGAN | Relativistic GAN | 64 | 32m | 15.55
-SAGAN | Hinge | 256 | 
+SAGAN | Hinge | 256 | 4h 38m | 7.23
 
 Train DCGAN on MNIST (28x28 padded to 32x32)
 

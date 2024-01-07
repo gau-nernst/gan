@@ -2,8 +2,8 @@
 # https://github.com/mit-han-lab/data-efficient-gans
 
 import torch
+import torch.nn.functional as F
 from torch import Tensor, nn
-from torchvision.transforms import v2
 
 
 def rand_brightness(x: Tensor) -> Tensor:
@@ -20,7 +20,6 @@ def rand_contrast(x: Tensor) -> Tensor:
     return mean + (x - mean) * (torch.rand(*x.shape[:-3], 1, 1, 1, dtype=x.dtype, device=x.device) + 0.5)
 
 
-# v2.ColorJitter will clamp output to [0,1], so we have to use our own version
 class ColorJitter(nn.Module):
     def forward(self, x: Tensor):
         x = rand_brightness(x)
@@ -29,10 +28,29 @@ class ColorJitter(nn.Module):
         return x
 
 
+class RandomTranslate(nn.Module):
+    def forward(self, x: Tensor) -> Tensor:
+        H, W = x.shape[-2:]
+        pad_h, pad_w = H // 8, W // 8
+        x = F.pad(x, (pad_w, pad_w, pad_h, pad_h))
+        offset_y = torch.randint(0, pad_h * 2, ()).item()
+        offset_x = torch.randint(0, pad_w * 2, ()).item()
+        return x[..., offset_y : offset_y + H, offset_x : offset_x + W]
+
+
+class RandomCutout(nn.Module):
+    def forward(self, x: Tensor) -> Tensor:
+        H, W = x.shape[-2:]
+        offset_y = torch.randint(0, H // 2, ()).item()
+        offset_x = torch.randint(0, W // 2, ()).item()
+        x[..., offset_y : offset_y + H // 2, offset_x : offset_x + H // 2] = 0
+        return x
+
+
 class DiffAugment(nn.Sequential):
     def __init__(self) -> None:
         super().__init__(
             ColorJitter(),
-            v2.RandomAffine(0, (0.125, 0.125)),
-            v2.RandomErasing(p=1.0),  # not exactly the same
+            RandomTranslate(),
+            RandomCutout(),
         )
