@@ -79,7 +79,7 @@ class WGAN_GP:
 class HingeLoss:
     @staticmethod
     def d_loss(disc: nn.Module, reals: Tensor, fakes: Tensor) -> Tensor:
-        return F.relu(1 - disc(reals), inplace=True) + F.relu(1 + disc(fakes), inplace=True)
+        return F.relu(1 - disc(reals), inplace=True).mean() + F.relu(1 + disc(fakes), inplace=True).mean()
 
     g_loss = WGAN.g_loss
 
