@@ -12,6 +12,7 @@ from torchvision import datasets, io
 from torchvision.transforms import v2
 from tqdm import tqdm
 
+from diff_augment import DiffAugment
 from ema import EMA
 from fid import FID
 from losses import get_gan_loss
@@ -45,6 +46,7 @@ class TrainConfig:
     optimizer_kwargs: dict = field(default_factory=dict)
     batch_size: int = 64
     method: str = "gan"
+    diff_augment: bool = False
 
     run_name: str = "dcgan_celeba"
     log_img_interval: int = 1_000
@@ -86,6 +88,8 @@ if __name__ == "__main__":
         disc.apply(apply_spectral_norm)
     if cfg.sn_gen:
         gen.apply(apply_spectral_norm)
+    if cfg.diff_augment:
+        disc = nn.Sequential(DiffAugment(), disc)
 
     print(disc)
     print(gen)
