@@ -20,7 +20,7 @@ def rand_contrast(x: Tensor) -> Tensor:
     return mean + (x - mean) * (torch.rand(*x.shape[:-3], 1, 1, 1, dtype=x.dtype, device=x.device) + 0.5)
 
 
-# v2.ColorJitter will clamp the output to [0,1], so we cannot use it
+# v2.ColorJitter will clamp output to [0,1], so we have to use our own version
 class ColorJitter(nn.Module):
     def forward(self, x: Tensor):
         x = rand_brightness(x)
