@@ -7,7 +7,7 @@ Features:
 - GAN losses:
   - [Original GAN loss](https://arxiv.org/abs/1406.2661) (non-saturating version i.e. replace `log(1-sigmoid(d(x)))` with `logsigmoid(-d(x))`)
   - [WGAN](https://arxiv.org/abs/1701.07875) and [WGAN-GP](https://arxiv.org/abs/1704.00028)
-  - Hinge loss
+  - [Hinge loss](https://arxiv.org/abs/1802.05957)
   - [LSGAN](https://arxiv.org/abs/1611.04076)
   - [Relativistic GAN](https://arxiv.org/abs/1807.00734)
 - GAN regularization:
