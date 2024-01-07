@@ -6,7 +6,7 @@ from pathlib import Path
 
 import torch
 import wandb
-from torch import Tensor
+from torch import Tensor, nn
 from torch.utils.data import DataLoader
 from torchvision import datasets, io
 from torchvision.transforms import v2
@@ -22,9 +22,16 @@ def unnormalize(x: Tensor) -> Tensor:
     return ((x * 0.5 + 0.5) * 255).round().to(torch.uint8)
 
 
+def apply_spectral_norm(m: nn.Module):
+    if isinstance(m, (nn.Linear, nn.modules.conv._ConvNd, nn.Embedding)):
+        nn.utils.parametrizations.spectral_norm(m)
+
+
 @dataclass
 class TrainConfig:
     img_size: int = 64
+    sn_disc: bool = False
+    sn_gen: bool = False
     device: str = "cuda" if torch.cuda.is_available() else "cpu"
     mixed_precision: bool = False
     n_iters: int = 30_000
@@ -70,6 +77,11 @@ if __name__ == "__main__":
 
     disc = DcGanDiscriminator(img_size=cfg.img_size, norm="none" if cfg.method == "wgan-gp" else "bn").to(cfg.device)
     gen = DcGanGenerator(img_size=cfg.img_size).to(cfg.device)
+    if cfg.sn_disc:
+        disc.apply(apply_spectral_norm)
+    if cfg.sn_gen:
+        gen.apply(apply_spectral_norm)
+
     print(disc)
     print(gen)
 
