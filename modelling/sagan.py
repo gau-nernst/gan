@@ -26,7 +26,10 @@ class ConditionalBatchNorm2d(nn.Module):
         self.eps = eps
 
     def forward(self, x: Tensor, y: Tensor) -> Tensor:
-        return F.batch_norm(x, None, None, self.weight(y), self.bias(y), True, 0.0, self.eps)
+        x = F.batch_norm(x, None, None, training=True, eps=self.eps)
+        weight = self.weight(y).unflatten(-1, (-1, 1, 1))
+        bias = self.bias(y).unflatten(-1, (-1, 1, 1))
+        return x * weight + bias
 
 
 class SelfAttention2d(nn.Module):
