@@ -17,47 +17,6 @@ from torch.cuda.amp.autocast_mode import custom_bwd, custom_fwd
 from .base import conv1x1
 
 
-# introduced in Progressive GAN
-class PixelNorm(nn.Module):
-    def __init__(self, in_dim: int, eps: float = 1e-8):
-        super().__init__()
-        self.eps = eps
-
-    def forward(self, x: Tensor) -> Tensor:
-        x = x.float()  # always compute in fp32
-        return x * x.square().mean(1, keepdim=True).add(self.eps).rsqrt()
-
-
-# introduced in Progressive GAN
-class MinibatchStdDev(nn.Module):
-    def __init__(self, group_size: int = 4):
-        super().__init__()
-        self.group_size = group_size
-
-    def forward(self, imgs: Tensor):
-        imgs = imgs.float()  # always compute in fp32
-        b, c, h, w = imgs.shape
-        std = imgs.view(self.group_size, -1, c, h, w).std(0, unbiased=False)
-        std = std.mean([1, 2, 3], keepdim=True)
-        std = std.repeat(self.group_size, 1, 1, 1).expand(b, 1, h, w)
-        return torch.cat([imgs, std], dim=1)
-
-
-# introduced in Progressive GAN
-class EqualizedLR(nn.Module):
-    def __init__(self, weight: Tensor):
-        super().__init__()
-        fan_in, _ = nn.init._calculate_fan_in_and_fan_out(weight)
-        gain = 2**0.5  # use gain=sqrt(2) everywhere
-        self.scale = gain / fan_in**0.5
-
-    def forward(self, weight: Tensor):
-        return weight * self.scale
-
-    def extra_repr(self) -> str:
-        return f"scale={self.scale}"
-
-
 def upfirdn2d(imgs: Tensor, kernel: Tensor, up: int, down: int, px1: int, px2: int, py1: int, py2: int):
     n, c, h, w = imgs.shape
     ky, kx = kernel.shape

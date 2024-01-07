@@ -14,7 +14,7 @@ import torch.nn.functional as F
 from torch import Tensor, nn
 
 from .nvidia_ops import Blur
-from .progressive_gan import ProgressiveGANDiscriminator, init_weights
+from .progressive_gan import ProgressiveGanDiscriminator, init_weights
 from .stylegan import MappingNetwork, StyleGANConfig
 
 
@@ -27,7 +27,7 @@ class StyleGAN2Config(StyleGANConfig):
     residual_D: bool = True
 
 
-class StyleGAN2Discriminator(ProgressiveGANDiscriminator):
+class StyleGAN2Discriminator(ProgressiveGanDiscriminator):
     def __init__(self, config: Optional[StyleGAN2Config] = None, **kwargs):
         config = config or StyleGAN2Config()
         config = replace(config, **kwargs)

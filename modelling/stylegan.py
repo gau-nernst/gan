@@ -13,12 +13,12 @@ import torch
 from torch import Tensor, nn
 
 from .base import conv1x1, conv3x3
-from .nvidia_ops import PixelNorm, up_conv_blur
-from .progressive_gan import ProgressiveGANConfig, ProgressiveGANDiscriminator, init_weights
+from .nvidia_ops import up_conv_blur
+from .progressive_gan import PixelNorm, ProgressiveGanDiscriminator, init_weights
 
 
 @dataclass
-class StyleGANConfig(ProgressiveGANConfig):
+class StyleGANConfig:
     w_dim: int = 512
     mapping_network_depth: int = 8  # mapping network
     w_mean_beta: float = 0.995
@@ -30,7 +30,7 @@ class StyleGANConfig(ProgressiveGANConfig):
     norm: None = None
 
 
-class StyleGANDiscriminator(ProgressiveGANDiscriminator):
+class StyleGANDiscriminator(ProgressiveGanDiscriminator):
     def __init__(self, config: Optional[StyleGANConfig] = None, **kwargs):
         config = config or StyleGANConfig()
         config = replace(config, **kwargs)
