@@ -14,7 +14,7 @@ from torch import Tensor, nn
 
 from .base import conv1x1, conv3x3
 from .nvidia_ops import up_conv_blur
-from .progressive_gan import PixelNorm, ProgressiveGanDiscriminator, init_weights
+from .progressive_gan import ProgressiveGanDiscriminator, init_weights
 
 
 @dataclass
@@ -40,7 +40,7 @@ class StyleGANDiscriminator(ProgressiveGanDiscriminator):
 class MappingNetwork(nn.Module):
     def __init__(self, config: StyleGANConfig):
         super().__init__()
-        self.mlp = nn.Sequential(PixelNorm(config.z_dim))
+        self.mlp = nn.Sequential(nn.LayerNorm(config.z_dim))
         for i in range(config.mapping_network_depth):
             self.mlp.append(nn.Linear(config.z_dim if i == 0 else config.w_dim, config.w_dim))
             self.mlp.append(config.act())

@@ -35,7 +35,7 @@ class MinibatchStdDev(nn.Module):
         return torch.cat([imgs, std], dim=1)
 
 
-# with residual connection introduced in StyleGAN2, and use act-first.
+# with residual connection introduced in StyleGAN2, and pre-activation
 # this becomes identical SA-GAN, except activation function.
 class ProgressiveGanDiscriminatorBlock(nn.Module):
     def __init__(self, in_dim: int, out_dim: int) -> None:
@@ -85,6 +85,25 @@ class ProgressiveGanDiscriminator(nn.Sequential):
         self.apply(init_weights)
 
 
+# with residual connection introduced in StyleGAN2, and pre-activation
+class ProgressiveGanGeneratorBlock(nn.Module):
+    def __init__(self, in_dim: int, out_dim: int) -> None:
+        super().__init__()
+        self.residual = nn.Sequential(
+            nn.LeakyReLU(0.2, inplace=True),
+            LayerNorm2d(in_dim),
+            nn.Upsample(scale_factor=2.0),
+            nn.Conv2d(in_dim, out_dim, 3, 1, 1),
+            nn.LeakyReLU(0.2, inplace=True),
+            LayerNorm2d(out_dim),
+            nn.Conv2d(out_dim, out_dim, 3, 1, 1),
+        )
+        self.shortcut = nn.Sequential(nn.Conv2d(in_dim, out_dim, 1), nn.Upsample(scale_factor=2.0))
+
+    def forward(self, x: Tensor) -> Tensor:
+        return self.residual(x) + self.shortcut(x)
+
+
 class ProgressiveGanGenerator(nn.Sequential):
     def __init__(self, img_size: int, img_channels: int = 3, z_dim: int = 128, base_dim: int = 16) -> None:
         super().__init__()
@@ -104,17 +123,7 @@ class ProgressiveGanGenerator(nn.Sequential):
         depth = int(math.log2(img_size // 4))
         for i in range(depth):
             out_ch = min(base_dim * img_size // 4 // 2 ** (i + 1), 512)
-            self.append(
-                nn.Sequential(
-                    nn.LeakyReLU(0.2, inplace=True),
-                    LayerNorm2d(in_ch),
-                    nn.Upsample(scale_factor=2.0),
-                    nn.Conv2d(in_ch, out_ch, 3, 1, 1),
-                    nn.LeakyReLU(0.2, inplace=True),
-                    LayerNorm2d(out_ch),
-                    nn.Conv2d(out_ch, out_ch, 3, 1, 1),
-                )
-            )
+            self.append(ProgressiveGanGeneratorBlock(in_ch, out_ch))
             in_ch = out_ch
 
         self.append(
