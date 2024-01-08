@@ -50,6 +50,23 @@ class EqualizedLR(nn.Module):
         return f"scale={self.scale}"
 
 
+# with residual connection introduced in StyleGAN2. very similar to SA-GAN
+class ProgressiveGanDiscriminatorBlock(nn.Module):
+    def __init__(self, in_dim: int, out_dim: int) -> None:
+        super().__init__()
+        self.residual = nn.Sequential(
+            nn.Conv2d(in_dim, in_dim, 3, 1, 1),
+            nn.LeakyReLU(0.2, inplace=True),
+            nn.Conv2d(in_dim, out_dim, 3, 1, 1),
+            nn.AvgPool2d(2),
+            nn.LeakyReLU(0.2, inplace=True),
+        )
+        self.shortcut = nn.Sequential(nn.AvgPool2d(2), nn.Conv2d(in_dim, out_dim, 1))
+
+    def forward(self, x: Tensor) -> Tensor:
+        return self.residual(x) + self.shortcut(x)
+
+
 class ProgressiveGanDiscriminator(nn.Sequential):
     def __init__(self, img_size: int, img_channels: int = 3, base_dim: int = 16) -> None:
         super().__init__()
@@ -59,15 +76,7 @@ class ProgressiveGanDiscriminator(nn.Sequential):
 
         for _ in range(depth):
             out_ch = min(in_ch * 2, 512)
-            self.append(
-                nn.Sequential(
-                    nn.Conv2d(in_ch, in_ch, 3, 1, 1),
-                    nn.LeakyReLU(0.2, inplace=True),
-                    nn.Conv2d(in_ch, out_ch, 3, 1, 1),
-                    nn.AvgPool2d(2),
-                    nn.LeakyReLU(0.2, inplace=True),
-                )
-            )
+            self.append(ProgressiveGanDiscriminatorBlock(in_ch, out_ch))
             in_ch = out_ch
 
         out_ch = min(in_ch * 2, 512)
