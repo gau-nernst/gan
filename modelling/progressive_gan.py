@@ -1,7 +1,8 @@
 # Progressive GAN - https://arxiv.org/pdf/1710.10196
 # See Table 2 for detailed model architecture
-# Discriminator supports BlurConv (StyleGAN) and skip-connections (StyleGAN2)
-# Generator has an option to use BlurConv
+# Discriminator has skip-connections introducted in StyleGAN2
+# PixelNorm is replaced with LayerNorm2d
+# EqualizedLR is not implemented
 #
 # Code reference:
 # https://github.com/tkarras/progressive_growing_of_gans
@@ -10,17 +11,14 @@ import math
 
 import torch
 from torch import Tensor, nn
-from torch.nn.utils import parametrize
 
 
-class PixelNorm(nn.Module):
-    def __init__(self, eps: float = 1e-8) -> None:
-        super().__init__()
-        self.eps = eps
-
+class LayerNorm2d(nn.LayerNorm):
     def forward(self, x: Tensor) -> Tensor:
-        x = x.float()  # always compute in fp32
-        return x * x.square().mean(1, keepdim=True).add(self.eps).rsqrt()
+        out = x.flatten(-2).transpose(-1, -2)
+        out = super().forward(out)
+        out = out.transpose(-1, -2).unflatten(-1, x.shape[-2:])
+        return out
 
 
 class MinibatchStdDev(nn.Module):
@@ -37,29 +35,17 @@ class MinibatchStdDev(nn.Module):
         return torch.cat([imgs, std], dim=1)
 
 
-class EqualizedLR(nn.Module):
-    def __init__(self, weight: Tensor):
-        super().__init__()
-        fan_in, _ = nn.init._calculate_fan_in_and_fan_out(weight)
-        self.scale = 2**0.5 / fan_in**0.5  # use gain=sqrt(2) everywhere
-
-    def forward(self, weight: Tensor):
-        return weight * self.scale
-
-    def extra_repr(self) -> str:
-        return f"scale={self.scale}"
-
-
-# with residual connection introduced in StyleGAN2. very similar to SA-GAN
+# with residual connection introduced in StyleGAN2, and use act-first.
+# this becomes identical SA-GAN, except activation function.
 class ProgressiveGanDiscriminatorBlock(nn.Module):
     def __init__(self, in_dim: int, out_dim: int) -> None:
         super().__init__()
         self.residual = nn.Sequential(
+            nn.LeakyReLU(0.2, inplace=True),
             nn.Conv2d(in_dim, in_dim, 3, 1, 1),
             nn.LeakyReLU(0.2, inplace=True),
             nn.Conv2d(in_dim, out_dim, 3, 1, 1),
             nn.AvgPool2d(2),
-            nn.LeakyReLU(0.2, inplace=True),
         )
         self.shortcut = nn.Sequential(nn.AvgPool2d(2), nn.Conv2d(in_dim, out_dim, 1))
 
@@ -71,7 +57,7 @@ class ProgressiveGanDiscriminator(nn.Sequential):
     def __init__(self, img_size: int, img_channels: int = 3, base_dim: int = 16) -> None:
         super().__init__()
         depth = int(math.log2(img_size // 4))
-        self.append(nn.Sequential(nn.Conv2d(img_channels, base_dim, 1), nn.LeakyReLU(0.2, inplace=True)))
+        self.append(nn.Conv2d(img_channels, base_dim, 1))
         in_ch = base_dim
 
         for _ in range(depth):
@@ -82,6 +68,7 @@ class ProgressiveGanDiscriminator(nn.Sequential):
         out_ch = min(in_ch * 2, 512)
         self.append(
             nn.Sequential(
+                nn.LeakyReLU(0.2, inplace=True),
                 MinibatchStdDev(),
                 nn.Conv2d(in_ch + 1, in_ch, 3, 1, 1),
                 nn.LeakyReLU(0.2, inplace=True),
@@ -101,18 +88,15 @@ class ProgressiveGanDiscriminator(nn.Sequential):
 class ProgressiveGanGenerator(nn.Sequential):
     def __init__(self, img_size: int, img_channels: int = 3, z_dim: int = 128, base_dim: int = 16) -> None:
         super().__init__()
-        self.input_norm = PixelNorm()
-
         out_ch = min(base_dim * img_size // 4, 512)
         self.append(
             nn.Sequential(
+                nn.LayerNorm(z_dim),
                 nn.Unflatten(-1, (-1, 1, 1)),
                 nn.ConvTranspose2d(z_dim, out_ch, 4),
                 nn.LeakyReLU(0.2, inplace=True),
-                PixelNorm(),
+                LayerNorm2d(out_ch),
                 nn.Conv2d(out_ch, out_ch, 3, 1, 1),
-                nn.LeakyReLU(0.2, inplace=True),
-                PixelNorm(),
             )
         )
         in_ch = out_ch
@@ -122,18 +106,24 @@ class ProgressiveGanGenerator(nn.Sequential):
             out_ch = min(base_dim * img_size // 4 // 2 ** (i + 1), 512)
             self.append(
                 nn.Sequential(
+                    nn.LeakyReLU(0.2, inplace=True),
+                    LayerNorm2d(in_ch),
                     nn.Upsample(scale_factor=2.0),
                     nn.Conv2d(in_ch, out_ch, 3, 1, 1),
                     nn.LeakyReLU(0.2, inplace=True),
-                    PixelNorm(),
+                    LayerNorm2d(out_ch),
                     nn.Conv2d(out_ch, out_ch, 3, 1, 1),
-                    nn.LeakyReLU(0.2, inplace=True),
-                    PixelNorm(),
                 )
             )
             in_ch = out_ch
 
-        self.append(nn.Conv2d(in_ch, img_channels, 1))
+        self.append(
+            nn.Sequential(
+                nn.LeakyReLU(0.2, inplace=True),
+                LayerNorm2d(out_ch),
+                nn.Conv2d(in_ch, img_channels, 1),
+            )
+        )
 
         self.reset_parameters()
 
@@ -143,7 +133,6 @@ class ProgressiveGanGenerator(nn.Sequential):
 
 def init_weights(module: nn.Module):
     if isinstance(module, (nn.modules.conv._ConvNd, nn.Linear)):
-        nn.init.normal_(module.weight)
-        parametrize.register_parametrization(module, "weight", EqualizedLR(module.weight))
+        nn.init.kaiming_normal_(module.weight, a=0.2)
         if module.bias is not None:
             nn.init.zeros_(module.bias)

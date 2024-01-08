@@ -146,7 +146,8 @@ Relativistic GAN: simple, fast, and excellent results. It beats WGAN, WGAN-GP, a
 Progressive GAN:
 
 - With fp16 mixed precision training, PixelNorm and MinibatchStdDev need to be computed in fp32 for numerical stability. This can be done simply by calling `.float()` inside `.forward()` (no-op if input is already fp32).
-- Equalized learning rate helps with training stability. (I have tried not using Equalized LR and scaling LR accordingly but it didn't work. I still think Equalized LR is not necessary since no other networks need that.)
+- I found that Progressive GAN cannot be trained with bf16. It is likely due to PixelNorm causing underflow (although it doesn't seem like underflow should happen?). Replacing PixelNorm with LayerNorm2d, which is very similar, seems to fix the issue.
+- Equalized learning rate does not seem to be important. SA-GAN, with a similar architecture, can be trained noramlly.
 - I'm not sure if Discriminator output drift penalty is necessary
 - Mini-batch standard deviation in Discriminator and beta1=0 seem to be important
 - Tanh is not used in Generator (to force values in [-1,1])

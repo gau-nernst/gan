@@ -19,6 +19,11 @@ from losses import get_gan_loss
 from modelling import build_discriminator, build_generator
 
 
+torch.backends.cuda.matmul.allow_tf32 = True
+torch.backends.cudnn.allow_tf32 = True
+torch.backends.cudnn.benchmark = True
+
+
 def unnormalize(x: Tensor) -> Tensor:
     return ((x * 0.5 + 0.5) * 255).round().to(torch.uint8)
 
