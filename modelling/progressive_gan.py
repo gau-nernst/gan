@@ -1,8 +1,10 @@
 # Progressive GAN - https://arxiv.org/pdf/1710.10196
 # See Table 2 for detailed model architecture
-# Discriminator has skip-connections introducted in StyleGAN2
-# PixelNorm is replaced with LayerNorm2d
-# EqualizedLR is not implemented
+# Modifications:
+# - Generator and Discriminator have skip-connections, introducted in StyleGAN2.
+# - Residual connection: use pre-norm/pre-activation. Apply norm before activation.
+# - PixelNorm in Generator is replaced with LayerNorm2d.
+# - EqualizedLR is not implemented.
 #
 # Code reference:
 # https://github.com/tkarras/progressive_growing_of_gans
@@ -35,8 +37,7 @@ class MinibatchStdDev(nn.Module):
         return torch.cat([imgs, std], dim=1)
 
 
-# with residual connection introduced in StyleGAN2, and pre-activation
-# this becomes identical SA-GAN, except activation function.
+# this is identical SA-GAN, except activation function.
 class ProgressiveGanDiscriminatorBlock(nn.Module):
     def __init__(self, in_dim: int, out_dim: int) -> None:
         super().__init__()
@@ -85,17 +86,15 @@ class ProgressiveGanDiscriminator(nn.Sequential):
         self.apply(init_weights)
 
 
-# with residual connection introduced in StyleGAN2, and pre-activation
 class ProgressiveGanGeneratorBlock(nn.Module):
     def __init__(self, in_dim: int, out_dim: int) -> None:
         super().__init__()
         self.residual = nn.Sequential(
-            nn.LeakyReLU(0.2, inplace=True),
             LayerNorm2d(in_dim),
+            nn.LeakyReLU(0.2, inplace=True),
             nn.Upsample(scale_factor=2.0),
             nn.Conv2d(in_dim, out_dim, 3, 1, 1),
             nn.LeakyReLU(0.2, inplace=True),
-            LayerNorm2d(out_dim),
             nn.Conv2d(out_dim, out_dim, 3, 1, 1),
         )
         self.shortcut = nn.Sequential(nn.Conv2d(in_dim, out_dim, 1), nn.Upsample(scale_factor=2.0))
@@ -114,7 +113,6 @@ class ProgressiveGanGenerator(nn.Sequential):
                 nn.Unflatten(-1, (-1, 1, 1)),
                 nn.ConvTranspose2d(z_dim, out_ch, 4),
                 nn.LeakyReLU(0.2, inplace=True),
-                LayerNorm2d(out_ch),
                 nn.Conv2d(out_ch, out_ch, 3, 1, 1),
             )
         )
@@ -128,8 +126,8 @@ class ProgressiveGanGenerator(nn.Sequential):
 
         self.append(
             nn.Sequential(
-                nn.LeakyReLU(0.2, inplace=True),
                 LayerNorm2d(out_ch),
+                nn.LeakyReLU(0.2, inplace=True),
                 nn.Conv2d(in_ch, img_channels, 1),
             )
         )
