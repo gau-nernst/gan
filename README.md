@@ -50,12 +50,13 @@ python train_celeba.py --run_name dcgan_celeba_wgan-gp --disc_kwargs '{"norm":"n
 python train_celeba.py --run_name dcgan_celeba_sngan --disc_kwargs '{"norm":"none"}' --sn_disc --lr 1e-4 --optimizer Adam --optimizer_kwargs '{"betas":[0.5,0.999]}' --batch_size 64 --method hinge --mixed_precision
 python train_celeba.py --run_name dcgan_celeba_rgan --lr 2e-4 --optimizer Adam --optimizer_kwargs '{"betas":[0.5,0.999]}' --batch_size 64 --method rgan --mixed_precision
 python train_celeba.py --run_name dcgan_celeba_sagan --model sagan --sn_disc --sn_gen --lr 2e-4 --optimizer Adam --optimizer_kwargs '{"betas":[0,0.9]}' --batch_size 256 --method hinge --mixed_precision
-python train_celeba.py --run_name dcgan_celeba_progran --model progressive_gan --lr 1e-3 --optimizer Adam --optimizer_kwargs '{"betas":[0,0.99]}' --batch_size 16 --method wgan-gp --mixed_precision  # TODO
+python train_celeba.py --run_name dcgan_celeba_progran --model progressive_gan --lr 2e-4 --optimizer Adam --optimizer_kwargs '{"betas":[0.5,0.999]}' --batch_size 64 --method rgan --mixed_precision
 ```
 
 NOTE:
 - SN-GAN didn't exactly use DCGAN architecture.
 - SAGAN uses different learning rates for Generator (1e-4) and Discriminator (4e-4). 
+- Relativistic GAN is used to train Progressive GAN instead of WGAN-GP. Also, there is no progressive growing.
 
 Results: CelebA 64x64, 30k generator iterations, trained with bf16 on single 3070. Training time includes FID calculation, which is quite slow. EMA is used. FID is calculated using 10k samples.
 
@@ -65,6 +66,7 @@ DCGAN | GAN | 128 | 38m | 45.69
 DCGAN | WGAN | 64 | 1h 7m | 28.86
 DCGAN | WGAN-GP | 64 | 1h 10m | 17.33 | No bn in discriminator
 DCGAN | Hinge | 64 | 33m | 22.90 | (SN-GAN) No bn in discriminator. Spectral norm in discriminator
+DCGAN | Hinge | 64 | 34m | 19.22 | (SN-GAN w/ SA-GAN hyperparams) No bn in discriminator. Spectral norm in discriminator and generator
 DCGAN | Relativistic GAN | 64 | 32m | 15.55
 SAGAN | Hinge | 256 | 4h 38m | 7.23 | Spectral norm in discriminator and generator
 
@@ -147,9 +149,9 @@ Relativistic GAN: simple, fast, and excellent results. It beats WGAN, WGAN-GP, a
 Progressive GAN:
 
 - With fp16 mixed precision training, PixelNorm and MinibatchStdDev need to be computed in fp32 for numerical stability. This can be done simply by calling `.float()` inside `.forward()` (no-op if input is already fp32).
-- I found that Progressive GAN cannot be trained with bf16. It is likely due to PixelNorm causing underflow (although it doesn't seem like underflow should happen?). Replacing PixelNorm with LayerNorm2d, which is very similar, seems to fix the issue.
+- I found that Progressive GAN cannot be trained with bf16.
 - Equalized learning rate does not seem to be important. SA-GAN, with a similar architecture, can be trained noramlly.
-- I'm not sure if Discriminator output drift penalty is necessary
+- Discriminator output drift penalty is not really necessary. It helps stabilize training at the start, but doesn't improve the results later in training.
 - Mini-batch standard deviation in Discriminator and beta1=0 seem to be important
 - Tanh is not used in Generator (to force values in [-1,1])
 - The author needed to use batch size 16 in order to fit training in GPU memory at 1024x1024 resolution. Having larger batch size is actually better, but hyperparameters need to be adjusted i.e. larger learning rate.

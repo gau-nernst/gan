@@ -25,7 +25,7 @@ torch.backends.cudnn.benchmark = True
 
 
 def unnormalize(x: Tensor) -> Tensor:
-    return ((x * 0.5 + 0.5) * 255).round().to(torch.uint8)
+    return ((x * 0.5 + 0.5) * 255).round().clip(0, 255).to(torch.uint8)
 
 
 def apply_spectral_norm(m: nn.Module):
@@ -123,7 +123,7 @@ if __name__ == "__main__":
     fixed_zs = torch.randn(100, 128, device=cfg.device)
 
     fid_scorer = FID(cfg.device)
-    celeba_stats_path = Path("celeba_stats.pth")
+    celeba_stats_path = Path(f"celeba{cfg.img_size}_stats.pth")
 
     if not celeba_stats_path.exists():
         celeba_stats = fid_scorer.compute_stats(lambda: next(dloader)[0].to(cfg.device))
