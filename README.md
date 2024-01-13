@@ -11,12 +11,12 @@ Features:
   - [LSGAN](https://arxiv.org/abs/1611.04076)
   - [Relativistic GAN](https://arxiv.org/abs/1807.00734)
 - GAN regularization:
-  - Spectral norm (SN-GAN)
-  - R1 (StyleGAN, StyleGAN2)
+  - R1 (StyleGAN, StyleGAN2) (TODO: remove)
+  - [DiffAuugment](https://arxiv.org/abs/2006.10738)
   - TODO: path length regularization (StyleGAN2)
 - Architectures
   - [DCGAN](https://arxiv.org/abs/1511.06434)
-  - Conditional GAN (modified for CNN)
+  - Conditional GAN (modified for CNN) (TODO: remove)
   - NVIDIA GANs:
     - [Progressive GAN](https://arxiv.org/pdf/1710.10196)
     - [StyleGAN](https://arxiv.org/abs/1812.04948)
