@@ -40,24 +40,25 @@ class AdaIN(nn.InstanceNorm2d):
         return super().forward(x) * weight + bias
 
 
-class StyleGANGeneratorBlock(nn.Module):
+class StyleGanGeneratorBlock(nn.Module):
     def __init__(self, in_dim: int, out_dim: int, z_dim: int, first_block: bool = False) -> None:
         super().__init__()
         self.residual = nn.ModuleList()
+        self.shortcut = nn.Sequential(nn.Conv2d(in_dim, out_dim, 1))
         if not first_block:
             self.residual.append(nn.Upsample(scale_factor=2.0))
             self.residual.append(nn.Conv2d(in_dim, out_dim, 3, 1, 1))
             # TODO: blur layer
-            self.shortcut = nn.Sequential(nn.Conv2d(in_dim, out_dim, 1), nn.Upsample(scale_factor=2.0))
-        else:
-            self.shortcut = nn.Identity()
+            in_dim = out_dim
+
+            self.shortcut.append(nn.Upsample(scale_factor=2.0))
 
         self.residual.extend(
             [
-                ApplyNoise(out_dim),
+                ApplyNoise(in_dim),
                 nn.LeakyReLU(0.2, inplace=True),
-                AdaIN(out_dim, z_dim),
-                nn.Conv2d(out_dim, out_dim, 3, 1, 1),
+                AdaIN(in_dim, z_dim),
+                nn.Conv2d(in_dim, out_dim, 3, 1, 1),
                 ApplyNoise(out_dim),
                 nn.LeakyReLU(0.2, inplace=True),
                 AdaIN(out_dim, z_dim),
@@ -70,7 +71,7 @@ class StyleGANGeneratorBlock(nn.Module):
         return x
 
 
-class StyleGANGenerator(nn.Module):
+class StyleGanGenerator(nn.Module):
     def __init__(self, img_size: int, img_channels: int = 3, z_dim: int = 128, base_dim: int = 16) -> None:
         super().__init__()
         self.mapping_network = nn.Sequential(nn.LayerNorm(z_dim))
@@ -81,13 +82,13 @@ class StyleGANGenerator(nn.Module):
 
         out_ch = min(base_dim * img_size // 4, 512)
         self.blocks = nn.ModuleList()
-        self.blocks.append(StyleGANGeneratorBlock(512, out_ch, z_dim, first_block=True))
+        self.blocks.append(StyleGanGeneratorBlock(512, out_ch, z_dim, first_block=True))
         in_ch = out_ch
 
         depth = int(math.log2(img_size // 4))
         for i in range(depth):
             out_ch = min(base_dim * img_size // 4 // 2 ** (i + 1), 512)
-            self.blocks.append(StyleGANGeneratorBlock(in_ch, out_ch, z_dim))
+            self.blocks.append(StyleGanGeneratorBlock(in_ch, out_ch, z_dim))
             in_ch = out_ch
 
         self.out_conv = nn.Conv2d(in_ch, img_channels, 1)

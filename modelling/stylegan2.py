@@ -14,24 +14,10 @@ import torch.nn.functional as F
 from torch import Tensor, nn
 
 from .nvidia_ops import Blur
-from .progressive_gan import ProgressiveGanDiscriminator, init_weights
-from .stylegan import MappingNetwork, StyleGANConfig
+from .progressive_gan import init_weights
 
 
 batched_conv2d = torch.vmap(F.conv2d)
-
-
-@dataclass
-class StyleGAN2Config(StyleGANConfig):
-    blur_size: int = 4  # override StyleGAN
-    residual_D: bool = True
-
-
-class StyleGAN2Discriminator(ProgressiveGanDiscriminator):
-    def __init__(self, config: Optional[StyleGAN2Config] = None, **kwargs):
-        config = config or StyleGAN2Config()
-        config = replace(config, **kwargs)
-        super().__init__(config)
 
 
 class ModulatedConv2d(nn.Module):
@@ -57,7 +43,7 @@ class ModulatedConv2d(nn.Module):
 
 
 class StyleGAN2GeneratorBlock(nn.Module):
-    def __init__(self, in_dim: int, out_dim: int, config: StyleGAN2Config, upsample: bool = False):
+    def __init__(self, in_dim: int, out_dim: int, config: "StyleGAN2Config", upsample: bool = False):
         super().__init__()
         # TODO: merge upsample with conv into conv_transpose (up_conv_blur)
         self.up = nn.Upsample(scale_factor=2.0) if upsample else nn.Identity()
@@ -74,12 +60,12 @@ class StyleGAN2GeneratorBlock(nn.Module):
 
 
 class RGBLayer(ModulatedConv2d):
-    def __init__(self, in_dim: int, config: StyleGAN2Config):
+    def __init__(self, in_dim: int, config: "StyleGAN2Config"):
         super().__init__(in_dim, config.img_channels, 1, config.w_dim, demodulation=False)
 
 
 class StyleGAN2Generator(nn.Module):
-    def __init__(self, config: Optional[StyleGAN2Config] = None, **kwargs):
+    def __init__(self, config: Optional["StyleGAN2Config"] = None, **kwargs):
         config = config or StyleGAN2Config()
         config = replace(config, **kwargs)
         assert config.img_size > 4 and math.log2(config.img_size).is_integer()
