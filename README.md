@@ -18,7 +18,7 @@ Features:
   - [DCGAN](https://arxiv.org/abs/1511.06434)
   - Conditional GAN (modified for CNN)
   - NVIDIA GANs:
-    - [Progressive GAN](https://arxiv.org/pdf/1710.10196)
+    - (Modified) [Progressive GAN](https://arxiv.org/pdf/1710.10196)
     - [StyleGAN](https://arxiv.org/abs/1812.04948)
     - [StyleGAN2](https://arxiv.org/abs/1912.04958)
   - [SA-GAN](https://arxiv.org/pdf/1805.08318)
@@ -68,7 +68,7 @@ DCGAN | WGAN-GP | 64 | 1h 10m | 17.33 | No bn in discriminator
 DCGAN | Hinge | 64 | 33m | 22.90 | (SN-GAN) No bn in discriminator. Spectral norm in discriminator
 DCGAN | Hinge | 64 | 34m | 19.22 | (SN-GAN w/ SA-GAN hyperparams) No bn in discriminator. Spectral norm in discriminator and generator
 DCGAN | Relativistic GAN | 64 | 32m | 15.55
-Progressive GAN | Relativistic GAN | 64 | 43m | 15.10
+(Modified) Progressive GAN | Relativistic GAN | 64 | 43m | 15.10
 SAGAN | Hinge | 256 | 4h 38m | 7.23 | Spectral norm in discriminator and generator
 
 Train DCGAN on MNIST (28x28 padded to 32x32)
