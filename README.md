@@ -18,7 +18,7 @@ Features:
   - [DCGAN](https://arxiv.org/abs/1511.06434)
   - Conditional GAN (modified for CNN) (TODO: remove)
   - NVIDIA GANs:
-    - [Progressive GAN](https://arxiv.org/pdf/1710.10196)
+    - (Modified) [Progressive GAN](https://arxiv.org/pdf/1710.10196)
     - [StyleGAN](https://arxiv.org/abs/1812.04948)
     - [StyleGAN2](https://arxiv.org/abs/1912.04958)
   - [SA-GAN](https://arxiv.org/pdf/1805.08318)
@@ -50,11 +50,32 @@ python train_celeba.py --run_name dcgan_celeba_wgan-gp --disc_kwargs '{"norm":"n
 python train_celeba.py --run_name dcgan_celeba_sngan --disc_kwargs '{"norm":"none"}' --sn_disc --lr 1e-4 --optimizer Adam --optimizer_kwargs '{"betas":[0.5,0.999]}' --batch_size 64 --method hinge --mixed_precision
 python train_celeba.py --run_name dcgan_celeba_rgan --lr 2e-4 --optimizer Adam --optimizer_kwargs '{"betas":[0.5,0.999]}' --batch_size 64 --method rgan --mixed_precision
 python train_celeba.py --run_name dcgan_celeba_sagan --model sagan --sn_disc --sn_gen --lr 2e-4 --optimizer Adam --optimizer_kwargs '{"betas":[0,0.9]}' --batch_size 256 --method hinge --mixed_precision
+python train_celeba.py --run_name dcgan_celeba_progran --model progressive_gan --lr 2e-4 --optimizer Adam --optimizer_kwargs '{"betas":[0.5,0.999]}' --batch_size 64 --method rgan --mixed_precision
 ```
 
 NOTE:
 - SN-GAN didn't exactly use DCGAN architecture.
 - SAGAN uses different learning rates for Generator (1e-4) and Discriminator (4e-4). 
+- Relativistic GAN is used to train Progressive GAN instead of WGAN-GP. Also, there is no progressive growing.
+
+Results: CelebA 64x64, 30k generator iterations, trained with bf16 on single 3070. Training time includes FID calculation, which is quite slow. EMA is used. FID is calculated using 10k samples.
+
+Model | Loss | Batch size | Time | FID | Note | Samples
+------|------|------------|------|-----|------|--------
+DCGAN | GAN | 128 | 38m | 45.69 | | ![dcgan_celeba](https://github.com/gau-nernst/gan/assets/26946864/fcbf8e3c-8fc6-4d06-8666-0332e6314ecb)
+DCGAN | WGAN | 64 | 1h 7m | 28.86 | | ![dcgan_celeba_wgan](https://github.com/gau-nernst/gan/assets/26946864/6ea2f607-779c-4e3d-ba19-ce956300605e)
+DCGAN | WGAN-GP | 64 | 1h 10m | 17.33 | No bn in discriminator | ![dcgan_celeba_wgan-gp](https://github.com/gau-nernst/gan/assets/26946864/7b2ba538-e05e-4f0f-b90d-0948ba18abf9)
+DCGAN | Hinge | 64 | 33m | 22.90 | (SN-GAN) No bn in discriminator. Spectral norm in discriminator | ![dcgan_celeba_sngan](https://github.com/gau-nernst/gan/assets/26946864/1a4f499c-d41e-4200-ad61-a647d0db2f72)
+DCGAN | Hinge | 64 | 34m | 19.22 | (SN-GAN w/ SA-GAN hyperparams) No bn in discriminator. Spectral norm in discriminator and generator | ![dcgan_celeba_sngan2](https://github.com/gau-nernst/gan/assets/26946864/3cebfd6f-60e9-4421-94c3-41413efa4e03)
+DCGAN | Relativistic GAN | 64 | 32m | 15.55 | | ![dcgan_celeba_rgan](https://github.com/gau-nernst/gan/assets/26946864/53c53efb-96b2-4a88-9321-3a35cd0feb83)
+(Modified) Progressive GAN | Relativistic GAN | 64 | 43m | 15.10 | | ![dcgan_celeba_progran](https://github.com/gau-nernst/gan/assets/26946864/d4987826-e728-401e-be05-801d88898a18)
+SAGAN | Hinge | 256 | 4h 38m | 7.23 | Spectral norm in discriminator and generator | ![dcgan_celeba_sagan](https://github.com/gau-nernst/gan/assets/26946864/649b56ed-1052-4102-9a1d-a417c5126aa2)
+
+DCGAN with Relativistic GAN loss on CelebA 256x256 (30k iterations)
+
+![dcgan_celeba256_rgan](https://github.com/gau-nernst/gan/assets/26946864/9deaeb5d-c618-45a6-96d7-a3572ef52ba9)
+
+Old script
 
 Train DCGAN on MNIST (28x28 padded to 32x32)
 
@@ -107,7 +128,9 @@ python gan_img2img.py --dataset horse2zebra --model cyclegan --method lsgan --lo
 General
 
 - I could never get MLP-based GANs working. CNN-based GANs are much easier to train.
-- Use small batch size e.g. 32 (at least for original GAN. DCGAN paper used 128, WGAN paper used 64). Large batch size will make Discriminator much stronger than Generator. I haven't experimented batch size effect for WGAN, although theoretically WGAN should be able to be trained with large batch (since WGAN wants the best Discriminator given a Generator to estimate the correct Earth mover's distance). BigGAN uses large batch size (according to paper, haven't tested).
+- Most GANs don't scale with larger batch size. Typically, a small batch size like 32-64 is good (DCGAN paper used 128, WGAN paper used 64). Large batch size will make Discriminator much stronger than Generator.
+  - I haven't experimented batch size effect for WGAN, although theoretically WGAN should be able to be trained with large batch (since WGAN wants the best Discriminator given a Generator to estimate the correct Earth mover's distance). (future note: doesn't really make sense).
+  - SA-GAN (CNN with self-attention + Hinge loss) can scale well with batch size (Table 1 in [BigGAN](https://arxiv.org/abs/1809.11096), consistent improvements from batch size 256 to 2048, though it is not a fair comparison).
 - For upsampling with transposed convolution (`stride=2`), use `kernel_size=4` to avoid checkerboard artifacts (used by DCGAN).
 - DCGAN's Discriminator does not use pooling at the output, but flatten and matmul to 1 output. This is implemented as convolution with kernel size = feature map size. The paper states it helps with convergence speed. For the Generator, DCGAN applies matmul to latent vector and reshape to (512,4,4). This is implemented as convolution transpose with kernel size = output feature map size i.e. 4. All kernel sizes are 4 in Discriminator and Generator.
 - Batch norm helps GANs converge much faster. Regarding which mode (training vs evaluation) Batch norm layer should be at different stages, it seems most implementations leave it in training mode during training.
@@ -116,7 +139,7 @@ General
   - I haven't explored other norm layers e.g. Layer norm, Instance norm, Adaptive Instance norm.
 - Training dynamics: GAN training depends on random seed, sometimes I can get better (or worse) results by repeating the same training. GAN training may become unstable / collapse after some time, so early stopping is required.
 - Generated images can get desaturated / washed-out after a while. It seems like this starts to happen when Discriminator loss becomes plateau. There doesn't seem any literature on this phenomenon. (update: This was likely a bug in my previous implementation. If the discriminator has batch norm after its first convolution layer, it won't be able to tell the saturation in its input images. Removing the batch norm, as stated in DCGAN paper, seems to resolve this issue.)
-- Optimizer: most GANs use Adam with low `beta1` (0.5 or 0.0). Some GANs (WGAN-GP, NVIDIA GANs) require `beta1=0` for stable training. WGAN uses RMSprop. No one really explains this, but it is probably due to GAN training being a mini-max game between the Discrminator and Generator. Smoothing the gradients does not make sense (since the loss is not "stationary"). GANs also don't use weight decay.
+- Optimizer: most GANs use Adam with low `beta1` (0.5 or 0.0). Some GANs (WGAN-GP, NVIDIA GANs) require `beta1=0` for stable training. WGAN uses RMSprop (not momentum-based). Momentum does not make sense for optimizing GANs, since the objective is not stationary. GANs also don't use weight decay.
 - Provide label information helps with GAN training. It is probably beneficial for multi-modal distributions, thus learning a mapping from N-d Gaussian to data distribution is easier. There are several approaches to this:
   - Conditional GAN (CGAN)
   - Make Discriminator classify all classes + fake (suggested by [Salimans 2016](https://proceedings.neurips.cc/paper/2016/hash/8a3363abe792db2d8761d6403605aeb7-Abstract.html))
@@ -125,14 +148,17 @@ General
 
 WGAN and WGAN-GP:
 
-- They are not always better than the original GAN loss, while requiring longer training. Calculate 2nd order derivative is probably expensive.
-- It is necessary to train Discriminator more than Generator (so that Discriminator is a good EMD estimator given a fixed Generator), otherwise Discriminator may collapse `D(x) = D(G(z))`. Also, this leads to longer training.
+- It is necessary to train Discriminator more than Generator (so that Discriminator is a good EMD estimator given a fixed Generator), otherwise Discriminator may collapse `D(x) = D(G(z))`.
+- They are not always better than the original GAN loss, while requiring longer training (at least 2x slower). Calculate 2nd order derivative is also expensive (for WGAN-GP).
+
+Relativistic GAN: simple, fast, and excellent results. It beats WGAN, WGAN-GP, and SN-GAN, while having the speed of original GAN. TODO: see if RGAN can scale well with batch size.
 
 Progressive GAN:
 
 - With fp16 mixed precision training, PixelNorm and MinibatchStdDev need to be computed in fp32 for numerical stability. This can be done simply by calling `.float()` inside `.forward()` (no-op if input is already fp32).
-- Equalized learning rate helps with training stability. (I have tried not using Equalized LR and scaling LR accordingly but it didn't work. I still think Equalized LR is not necessary since no other networks need that.)
-- I'm not sure if Discriminator output drift penalty is necessary
+- I found that Progressive GAN cannot be trained with bf16.
+- Equalized learning rate does not seem to be important. SA-GAN, with a similar architecture, can be trained noramlly.
+- Discriminator output drift penalty is not really necessary. It helps stabilize training at the start, but doesn't improve the results later in training.
 - Mini-batch standard deviation in Discriminator and beta1=0 seem to be important
 - Tanh is not used in Generator (to force values in [-1,1])
 - The author needed to use batch size 16 in order to fit training in GPU memory at 1024x1024 resolution. Having larger batch size is actually better, but hyperparameters need to be adjusted i.e. larger learning rate.

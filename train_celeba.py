@@ -12,14 +12,20 @@ from torchvision import datasets, io
 from torchvision.transforms import v2
 from tqdm import tqdm
 
+from diff_augment import DiffAugment
 from ema import EMA
 from fid import FID
 from losses import get_gan_loss
 from modelling import build_discriminator, build_generator
 
 
+torch.backends.cuda.matmul.allow_tf32 = True
+torch.backends.cudnn.allow_tf32 = True
+torch.backends.cudnn.benchmark = True
+
+
 def unnormalize(x: Tensor) -> Tensor:
-    return ((x * 0.5 + 0.5) * 255).round().to(torch.uint8)
+    return ((x * 0.5 + 0.5) * 255).round().clip(0, 255).to(torch.uint8)
 
 
 def apply_spectral_norm(m: nn.Module):
@@ -45,6 +51,7 @@ class TrainConfig:
     optimizer_kwargs: dict = field(default_factory=dict)
     batch_size: int = 64
     method: str = "gan"
+    diff_augment: bool = False
 
     run_name: str = "dcgan_celeba"
     log_img_interval: int = 1_000
@@ -86,6 +93,8 @@ if __name__ == "__main__":
         disc.apply(apply_spectral_norm)
     if cfg.sn_gen:
         gen.apply(apply_spectral_norm)
+    if cfg.diff_augment:
+        disc = nn.Sequential(DiffAugment(), disc)
 
     print(disc)
     print(gen)
@@ -114,7 +123,7 @@ if __name__ == "__main__":
     fixed_zs = torch.randn(100, 128, device=cfg.device)
 
     fid_scorer = FID(cfg.device)
-    celeba_stats_path = Path("celeba_stats.pth")
+    celeba_stats_path = Path(f"celeba{cfg.img_size}_stats.pth")
 
     if not celeba_stats_path.exists():
         celeba_stats = fid_scorer.compute_stats(lambda: next(dloader)[0].to(cfg.device))
@@ -138,7 +147,7 @@ if __name__ == "__main__":
             with autocast_ctx:
                 with torch.no_grad():
                     fakes = gen(zs)
-                loss_d = criterion.d_loss(disc, reals, fakes)
+                loss_d, d_reals, d_fakes = criterion.d_loss(disc, reals, fakes)
             loss_d.backward()
             optim_d.step()
             optim_d.zero_grad()
@@ -156,7 +165,13 @@ if __name__ == "__main__":
         step += 1
         pbar.update()
         if step % 50 == 0:
-            logger.log({"loss/d": loss_d.item(), "loss/g": loss_g.item()}, step=step)
+            log_dict = {
+                "loss/d": loss_d.item(),
+                "d/real": d_reals.detach().mean().item(),
+                "d/fake": d_fakes.detach().mean().item(),
+                "loss/g": loss_g.item(),
+            }
+            logger.log(log_dict, step=step)
 
         if step % cfg.log_img_interval == 0:
             for suffix, model in [("", gen), ("_ema", gen_ema)]:

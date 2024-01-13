@@ -17,8 +17,9 @@ def get_gan_loss(name: str):
 # https://arxiv.org/abs/1406.2661
 class GAN:
     @staticmethod
-    def d_loss(disc: nn.Module, reals: Tensor, fakes: Tensor) -> Tensor:
-        return -F.logsigmoid(disc(reals)).mean() - F.logsigmoid(-disc(fakes)).mean()
+    def d_loss(disc: nn.Module, reals: Tensor, fakes: Tensor) -> tuple[Tensor, Tensor, Tensor]:
+        d_reals, d_fakes = disc(reals), disc(fakes)
+        return -F.logsigmoid(d_reals).mean() - F.logsigmoid(-d_fakes).mean(), d_reals, d_fakes
 
     @staticmethod
     def g_loss(d_fakes: Tensor, disc: nn.Module, reals: Tensor) -> Tensor:
@@ -28,8 +29,9 @@ class GAN:
 # https://arxiv.org/abs/1611.04076
 class LSGAN:
     @staticmethod
-    def d_loss(disc: nn.Module, reals: Tensor, fakes: Tensor) -> Tensor:
-        return (disc(reals) - 1).square().mean() + disc(fakes).square().mean()
+    def d_loss(disc: nn.Module, reals: Tensor, fakes: Tensor) -> tuple[Tensor, Tensor, Tensor]:
+        d_reals, d_fakes = disc(reals), disc(fakes)
+        return (d_reals - 1).square().mean() + d_fakes.square().mean(), d_reals, d_fakes
 
     @staticmethod
     def g_loss(d_fakes: Tensor, disc: nn.Module, reals: Tensor) -> Tensor:
@@ -40,11 +42,12 @@ class LSGAN:
 # https://github.com/martinarjovsky/WassersteinGAN
 class WGAN:
     @staticmethod
-    def d_loss(disc: nn.Module, reals: Tensor, fakes: Tensor) -> Tensor:
+    def d_loss(disc: nn.Module, reals: Tensor, fakes: Tensor) -> tuple[Tensor, Tensor, Tensor]:
         with torch.no_grad():
             for p in disc.parameters():
                 p.clip_(-0.01, 0.01)
-        return -disc(reals).mean() + disc(fakes).mean()
+        d_reals, d_fakes = disc(reals), disc(fakes)
+        return -d_reals.mean() + d_fakes.mean(), d_reals, d_fakes
 
     @staticmethod
     def g_loss(d_fakes: Tensor, disc: nn.Module, reals: Tensor) -> Tensor:
@@ -55,8 +58,9 @@ class WGAN:
 # https://github.com/igul222/improved_wgan_training
 class WGAN_GP:
     @staticmethod
-    def d_loss(disc: nn.Module, reals: Tensor, fakes: Tensor) -> Tensor:
-        loss_d = -disc(reals).mean() + disc(fakes).mean()
+    def d_loss(disc: nn.Module, reals: Tensor, fakes: Tensor) -> tuple[Tensor, Tensor, Tensor]:
+        d_reals, d_fakes = disc(reals), disc(fakes)
+        loss_d = -d_reals.mean() + d_fakes.mean()
 
         # https://pytorch.org/docs/stable/notes/amp_examples.html#gradient-penalty
         alpha = torch.rand(reals.shape[0], 1, 1, 1, device=reals.device)
@@ -67,7 +71,7 @@ class WGAN_GP:
             (d_grad,) = torch.autograd.grad(d_interpolates.sum(), interpolates, create_graph=True)
 
         d_grad_norm = torch.linalg.vector_norm(d_grad.flatten(1), dim=1)
-        return loss_d + (d_grad_norm - 1).square().mean() * 10
+        return loss_d + (d_grad_norm - 1).square().mean() * 10, d_reals, d_fakes
 
     g_loss = WGAN.g_loss
 
@@ -78,8 +82,9 @@ class WGAN_GP:
 # the exact form used is from SNGAN
 class HingeLoss:
     @staticmethod
-    def d_loss(disc: nn.Module, reals: Tensor, fakes: Tensor) -> Tensor:
-        return F.relu(1 - disc(reals)).mean() + F.relu(1 + disc(fakes)).mean()
+    def d_loss(disc: nn.Module, reals: Tensor, fakes: Tensor) -> tuple[Tensor, Tensor, Tensor]:
+        d_reals, d_fakes = disc(reals), disc(fakes)
+        return F.relu(1 - d_reals).mean() + F.relu(1 + d_fakes).mean(), d_reals, d_fakes
 
     g_loss = WGAN.g_loss
 
@@ -89,7 +94,8 @@ class HingeLoss:
 class RGAN:
     @staticmethod
     def d_loss(disc: nn.Module, reals: Tensor, fakes: Tensor) -> Tensor:
-        return -F.logsigmoid(disc(reals) - disc(fakes)).mean()
+        d_reals, d_fakes = disc(reals), disc(fakes)
+        return -F.logsigmoid(d_reals - d_fakes).mean(), d_reals, d_fakes
 
     @staticmethod
     def g_loss(d_fakes: Tensor, disc: nn.Module, reals: Tensor) -> Tensor:
