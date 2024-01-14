@@ -44,6 +44,7 @@ class TrainConfig:
 
     device: str = "cuda" if torch.cuda.is_available() else "cpu"
     mixed_precision: bool = False
+    grad_accum: int = 1
     n_iters: int = 30_000
     n_disc: int = 1
     lr: float = 2e-4
@@ -139,24 +140,31 @@ if __name__ == "__main__":
     step = 0  # generator update step
     pbar = tqdm(total=cfg.n_iters, dynamic_ncols=True)
     while step < cfg.n_iters:
-        for _ in range(cfg.n_disc):
-            reals, _ = next(dloader)
-            reals = reals.to(cfg.device)
+        for i in range(cfg.n_disc):
+            if i == cfg.n_disc - 1:
+                cached_reals = []
 
-            zs = torch.randn(cfg.batch_size, 128, device=cfg.device)
-            with autocast_ctx:
-                with torch.no_grad():
-                    fakes = gen(zs)
-                loss_d, d_reals, d_fakes = criterion.d_loss(disc, reals, fakes)
-            loss_d.backward()
+            for _ in range(cfg.grad_accum):
+                reals, _ = next(dloader)
+                reals = reals.to(cfg.device)
+                cached_reals.append(reals)  # cached for generator later
+
+                zs = torch.randn(cfg.batch_size, 128, device=cfg.device)
+                with autocast_ctx:
+                    with torch.no_grad():
+                        fakes = gen(zs)
+                    loss_d, d_reals, d_fakes = criterion.d_loss(disc, reals, fakes)
+                loss_d.backward()
+
             optim_d.step()
             optim_d.zero_grad()
 
         disc.requires_grad_(False)
-        zs = torch.randn(cfg.batch_size, 128, device=cfg.device)
-        with autocast_ctx:
-            loss_g = criterion.g_loss(disc(gen(zs)), disc, reals)
-        loss_g.backward()
+        for i in range(cfg.grad_accum):
+            zs = torch.randn(cfg.batch_size, 128, device=cfg.device)
+            with autocast_ctx:
+                loss_g = criterion.g_loss(disc(gen(zs)), disc, cached_reals[i])
+            loss_g.backward()
         optim_g.step()
         optim_g.zero_grad()
         disc.requires_grad_(True)
