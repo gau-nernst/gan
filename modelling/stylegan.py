@@ -52,7 +52,7 @@ class StyleGanGeneratorBlock(nn.Module):
             ApplyNoise(out_dim),
         ]
         self.residual = nn.ModuleList(residual)
-        if self.residual:
+        if residual:
             self.shortcut = nn.Sequential(nn.Conv2d(in_dim, out_dim, 1), nn.Upsample(scale_factor=2.0))
             self.scale = nn.Parameter(torch.full((out_dim, 1, 1), 1e-4))
         else:
