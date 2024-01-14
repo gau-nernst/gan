@@ -6,114 +6,96 @@
 # https://github.com/NVlabs/stylegan2
 
 import math
-from dataclasses import dataclass, replace
-from typing import Optional
 
 import torch
 import torch.nn.functional as F
 from torch import Tensor, nn
 
-from .nvidia_ops import Blur
 from .progressive_gan import init_weights
+from .stylegan import ApplyNoise
 
 
 batched_conv2d = torch.vmap(F.conv2d)
 
 
-class ModulatedConv2d(nn.Module):
-    def __init__(self, in_dim: int, out_dim: int, kernel_size: int, w_dim: int, demodulation: bool = True):
-        super().__init__()
-        # to contain weights for initialization and parametrization
-        self.conv = nn.Conv2d(in_dim, out_dim, kernel_size, padding=(kernel_size - 1) // 2)
-        self.style_weight = nn.Linear(w_dim, in_dim)  # A in paper
+class ModulatedConv2d(nn.Conv2d):
+    def __init__(
+        self, in_channels: int, out_channels: int, kernel_size: int, z_dim: int, demodulation: bool = True
+    ) -> None:
+        super().__init__(in_channels, out_channels, kernel_size, padding=(kernel_size - 1) // 2)
+        self.style_weight = nn.Linear(z_dim, in_channels)  # A in paper
         self.demodulation = demodulation
 
-    def forward(self, imgs: Tensor, w_embs: Tensor):
-        b, c, _, _ = imgs.shape
-
-        # modulation
-        style = self.style_weight(w_embs).view(b, 1, c, 1, 1) + 1
-        weight = self.conv.weight.unsqueeze(0) * style
+    def forward(self, x: Tensor, w: Tensor) -> Tensor:
+        style = self.style_weight(w).unflatten(-1, (1, -1, 1, 1)) + 1
+        weight = self.weight.unsqueeze(0) * style
         if self.demodulation:
-            weight = weight / torch.linalg.vector_norm(weight, dim=(2, 3, 4), keepdim=True)
+            weight = F.normalize(weight, dim=(2, 3, 4), eps=1e-8)
 
-        bias = self.conv.bias.view(1, -1).expand(b, -1) if self.conv.bias is not None else None
-        imgs = batched_conv2d(imgs, weight, bias, padding=self.conv.padding)
-        return imgs
+        bias = self.bias.view(1, -1).expand(x.shape[0], -1)
+        return batched_conv2d(x, weight, bias, padding=self.padding)
 
 
-class StyleGAN2GeneratorBlock(nn.Module):
-    def __init__(self, in_dim: int, out_dim: int, config: "StyleGAN2Config", upsample: bool = False):
+class StyleGan2GeneratorBlock(nn.Module):
+    def __init__(self, in_dim: int, out_dim: int, z_dim: int, img_channels: int, first_block: bool = False) -> None:
         super().__init__()
-        # TODO: merge upsample with conv into conv_transpose (up_conv_blur)
-        self.up = nn.Upsample(scale_factor=2.0) if upsample else nn.Identity()
-        self.conv = ModulatedConv2d(in_dim, out_dim, 3, config.w_dim)
-        self.blur = Blur(config.blur_size) if upsample else nn.Identity()
-        self.noise_weight = nn.Parameter(torch.tensor(0.0))  # B in paper
-        self.act = config.act()
+        self.layers = nn.ModuleList()
+        if not first_block:
+            layers = [
+                nn.Upsample(scale_factor=2.0),
+                ModulatedConv2d(in_dim, out_dim, 3, z_dim),
+                # TODO: blur
+                ApplyNoise(out_dim),
+                nn.LeakyReLU(0.2, inplace=True),
+            ]
+            self.layers.extend(layers)
 
-    def forward(self, imgs: Tensor, w_embs: Tensor):
-        imgs = self.blur(self.conv(self.up(imgs), w_embs))
-        b, _, h, w = imgs.shape
-        noise = torch.randn(b, 1, h, w, device=imgs.device)
-        return self.act(imgs + noise * self.noise_weight)
+        layers = [
+            ModulatedConv2d(out_dim, out_dim, 3, z_dim),
+            ApplyNoise(out_dim),
+            nn.LeakyReLU(0.2, inplace=True),
+        ]
+        self.layers.extend(layers)
+        self.to_rgb = ModulatedConv2d(out_dim, img_channels, 1, z_dim, demodulation=False)
+
+    def forward(self, x: Tensor, w_embs: Tensor):
+        for layer in self.layers:
+            x = layer(x, w_embs) if isinstance(layer, ModulatedConv2d) else layer(x)
+        return x, self.to_rgb(x)
 
 
-class RGBLayer(ModulatedConv2d):
-    def __init__(self, in_dim: int, config: "StyleGAN2Config"):
-        super().__init__(in_dim, config.img_channels, 1, config.w_dim, demodulation=False)
-
-
-class StyleGAN2Generator(nn.Module):
-    def __init__(self, config: Optional["StyleGAN2Config"] = None, **kwargs):
-        config = config or StyleGAN2Config()
-        config = replace(config, **kwargs)
-        assert config.img_size > 4 and math.log2(config.img_size).is_integer()
+class StyleGan2Generator(nn.Module):
+    def __init__(self, img_size: int, img_channels: int = 3, z_dim: int = 128, base_dim: int = 16) -> None:
         super().__init__()
-        self.mapping_network = MappingNetwork(config)
+        self.mapping_network = nn.Sequential(nn.LayerNorm(z_dim))
+        for _ in range(8):
+            self.mapping_network.extend([nn.Linear(z_dim, z_dim), nn.LeakyReLU(0.2, inplace=True)])
 
-        map_size = config.init_map_size
-        in_depth = config.input_depth
-        self.learned_input = nn.Parameter(torch.empty(1, in_depth, map_size, map_size))
-        self.up_blur = Blur(config.blur_size, up=2)
+        self.learned_input = nn.Parameter(torch.ones(1, 512, 4, 4))
 
-        depth = config.min_channels * config.img_size // map_size
-        out_depth = min(depth, config.max_channels)
+        out_ch = min(base_dim * img_size // 4, 512)
+        self.blocks = nn.ModuleList()
+        self.blocks.append(StyleGan2GeneratorBlock(512, out_ch, z_dim, img_channels, first_block=True))
+        in_ch = out_ch
 
-        self.first_block = StyleGAN2GeneratorBlock(in_depth, out_depth, config)
-        self.first_to_rgb = RGBLayer(out_depth, config)
-        in_depth = out_depth
-        depth //= 2
-
-        self.stages = nn.ModuleList()
-        while map_size < config.img_size:
-            out_depth = min(depth, config.max_channels)
-            stage = dict(
-                block1=StyleGAN2GeneratorBlock(in_depth, out_depth, config, upsample=True),
-                block2=StyleGAN2GeneratorBlock(out_depth, out_depth, config),
-                to_rgb=RGBLayer(out_depth, config),
-            )
-            self.stages.append(nn.ModuleDict(stage))
-            in_depth = out_depth
-            depth //= 2
-            map_size *= 2
+        depth = int(math.log2(img_size // 4))
+        for i in range(depth):
+            out_ch = min(base_dim * img_size // 4 // 2 ** (i + 1), 512)
+            self.blocks.append(StyleGan2GeneratorBlock(in_ch, out_ch, z_dim, img_channels))
+            in_ch = out_ch
 
         self.reset_parameters()
 
     def reset_parameters(self):
-        nn.init.ones_(self.learned_input)
         self.apply(init_weights)
 
-    def forward(self, z_embs: Tensor):
-        w_embs = self.mapping_network(z_embs)
+    def forward(self, z: Tensor):
+        w = self.mapping_network(z)
+        x = self.learned_input.expand(z.shape[0], -1, -1, -1)
+        x, y = self.blocks[0](x, w)
 
-        x = self.learned_input.expand(z_embs.size(0), -1, -1, -1)
-        x = self.first_block(x, w_embs[:, 0])
-        y = self.first_to_rgb(x, w_embs[:, 1])
-
-        for i, stage in enumerate(self.stages):
-            x = stage["block1"](x, w_embs[:, (i + 1) * 2])
-            x = stage["block2"](x, w_embs[:, (i + 1) * 2 + 1])
-            y = stage["to_rgb"](x, w_embs[:, (i + 1) * 2 + 1]) + self.up_blur(y)
+        for block in self.blocks[1:]:
+            x, new_y = block(x, w)
+            y = F.upsample(y, scale_factor=2.0) + new_y
 
         return y

@@ -7,7 +7,7 @@ from .progressive_gan import ProgressiveGanDiscriminator, ProgressiveGanGenerato
 from .sagan import SaGanDiscriminator, SaGanGenerator
 from .srgan import SRGANDiscriminator, SRResNet
 from .stylegan import StyleGanGenerator
-from .stylegan2 import StyleGAN2Generator
+from .stylegan2 import StyleGan2Generator
 
 
 def build_generator(name: str, *args, **kwargs):
@@ -15,7 +15,7 @@ def build_generator(name: str, *args, **kwargs):
         dcgan=DcGanGenerator,
         progressive_gan=ProgressiveGanGenerator,
         stylegan=StyleGanGenerator,
-        stylegan2=StyleGAN2Generator,
+        stylegan2=StyleGan2Generator,
         sagan=SaGanGenerator,
         cgan=CGANGenerator,
         pix2pix=UnetGenerator,
