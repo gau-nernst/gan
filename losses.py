@@ -17,6 +17,7 @@ def get_loss(name: str):
 def get_regularizer(name: str):
     return {
         "wgan-gp": wgan_gp_regularizer,
+        "r1": r1_regularizer,
     }.get(name, None)
 
 
@@ -83,7 +84,7 @@ class RelativisticGanLoss:
 # https://arxiv.org/abs/1704.00028
 # https://github.com/igul222/improved_wgan_training
 # https://pytorch.org/docs/stable/notes/amp_examples.html#gradient-penalty
-def wgan_gp_regularizer(disc: nn.Module, reals: Tensor, fakes: Tensor) -> Tensor:
+def wgan_gp_regularizer(disc: nn.Module, reals: Tensor, fakes: Tensor, d_reals: Tensor) -> Tensor:
     alpha = torch.rand(reals.shape[0], 1, 1, 1, device=reals.device)
     inter = reals.lerp(fakes.detach().float(), alpha).requires_grad_()
     d_inter = disc(inter)
@@ -93,3 +94,12 @@ def wgan_gp_regularizer(disc: nn.Module, reals: Tensor, fakes: Tensor) -> Tensor
 
     d_grad_norm = torch.linalg.vector_norm(d_grad.flatten(1), dim=1)
     return (d_grad_norm - 1).square().mean() * 10
+
+
+# https://arxiv.org/abs/1801.04406
+def r1_regularizer(disc: nn.Module, reals: Tensor, fakes: Tensor, d_reals: Tensor) -> Tensor:
+    with torch.autocast(reals.device.type, enabled=False):
+        (d_grad,) = torch.autograd.grad(d_reals.sum(), reals, create_graph=True)
+
+    d_grad_norm2 = d_grad.square().sum() / d_grad.shape[0]
+    return d_grad_norm2 * 5

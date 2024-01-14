@@ -164,7 +164,7 @@ if __name__ == "__main__":
                     d_fakes = disc(fakes)
                     loss_d = criterion.d_loss(d_reals, d_fakes)
                     if regularizer is not None:
-                        loss_d += regularizer(disc, reals, fakes)
+                        loss_d += regularizer(disc, reals, fakes, d_reals)
                 loss_d.backward()
 
             optim_d.step()
@@ -205,10 +205,8 @@ if __name__ == "__main__":
             def closure():
                 zs = torch.randn(cfg.batch_size, 128, device=cfg.device)
                 with autocast_ctx, torch.no_grad():
-                    return model(zs).float()
+                    return gen_ema(zs).float()
 
             stats = fid_scorer.compute_stats(closure)
-
             fid_score = fid_scorer.fid_score(celeba_stats, stats)
-            _suffix = "online" if suffix == "" else "ema"
-            logger.log({f"fid/{_suffix}": fid_score}, step=step)
+            logger.log({"fid/ema": fid_score}, step=step)
