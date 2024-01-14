@@ -15,7 +15,7 @@ from tqdm import tqdm
 from diff_augment import DiffAugment
 from ema import EMA
 from fid import FID
-from losses import get_gan_loss
+from losses import get_loss, get_regularizer
 from modelling import build_discriminator, build_generator
 
 
@@ -101,7 +101,8 @@ if __name__ == "__main__":
     print(gen)
 
     gen_ema = EMA(gen)
-    criterion = get_gan_loss(cfg.method)
+    criterion = get_loss(cfg.method)
+    regularizer = get_regularizer(cfg.method)
 
     optim_cls = getattr(torch.optim, cfg.optimizer)
     optim_d = optim_cls(disc.parameters(), cfg.lr, **cfg.optimizer_kwargs)
@@ -144,6 +145,11 @@ if __name__ == "__main__":
             if i == cfg.n_disc - 1:
                 cached_reals = []
 
+            if cfg.method == "wgan":
+                with torch.no_grad():
+                    for p in disc.parameters():
+                        p.clip_(-0.01, 0.01)
+
             for _ in range(cfg.grad_accum):
                 reals, _ = next(dloader)
                 reals = reals.to(cfg.device)
@@ -153,7 +159,11 @@ if __name__ == "__main__":
                 with autocast_ctx:
                     with torch.no_grad():
                         fakes = gen(zs)
-                    loss_d, d_reals, d_fakes = criterion.d_loss(disc, reals, fakes)
+                    d_reals = disc(reals)
+                    d_fakes = disc(fakes)
+                    loss_d = criterion.d_loss(d_reals, d_fakes)
+                    if regularizer is not None:
+                        loss_d += regularizer(disc, reals, fakes)
                 loss_d.backward()
 
             optim_d.step()
