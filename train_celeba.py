@@ -44,6 +44,8 @@ class TrainConfig:
 
     device: str = "cuda" if torch.cuda.is_available() else "cpu"
     mixed_precision: bool = False
+    channels_last: bool = False
+    compile: bool = False
     grad_accum: int = 1
     n_iters: int = 30_000
     n_disc: int = 1
@@ -91,12 +93,15 @@ if __name__ == "__main__":
 
     disc = build_discriminator(cfg.model, img_size=cfg.img_size, **cfg.disc_kwargs).to(cfg.device)
     gen = build_generator(cfg.model, img_size=cfg.img_size, **cfg.gen_kwargs).to(cfg.device)
-    if cfg.sn_disc:
-        disc.apply(apply_spectral_norm)
-    if cfg.sn_gen:
-        gen.apply(apply_spectral_norm)
-    if cfg.diff_augment:
-        disc = nn.Sequential(DiffAugment(), disc)
+    disc.apply(apply_spectral_norm) if cfg.sn_disc else None
+    gen.apply(apply_spectral_norm) if cfg.sn_gen else None
+    disc = nn.Sequential(DiffAugment(), disc) if cfg.diff_augment else disc
+    if cfg.channels_last:
+        gen.to(memory_format=torch.channels_last)
+        disc.to(memory_format=torch.channels_last)
+    if cfg.compile:
+        gen.compile()
+        disc.compile()
 
     print(disc)
     print(gen)
@@ -154,6 +159,8 @@ if __name__ == "__main__":
             for _ in range(cfg.grad_accum):
                 reals, _ = next(dloader)
                 reals = reals.to(cfg.device)
+                if cfg.channels_last:
+                    reals = reals.to(memory_format=torch.channels_last)
                 cached_reals.append(reals)  # cached for generator later
 
                 zs = torch.randn(cfg.batch_size, 128, device=cfg.device)
