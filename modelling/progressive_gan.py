@@ -108,7 +108,7 @@ class ProgressiveGanGeneratorBlock(nn.Module):
 
     def forward(self, x: Tensor) -> Tensor:
         out = self.residual(x)
-        if self.residual is not None:
+        if self.shortcut is not None:
             out = self.shortcut(x) + out * self.scale
         return out
 
