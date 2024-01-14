@@ -41,34 +41,28 @@ class AdaIN(nn.InstanceNorm2d):
 
 
 class StyleGanGeneratorBlock(nn.Module):
-    def __init__(self, in_dim: int, out_dim: int, z_dim: int, first_block: bool = False) -> None:
+    def __init__(self, in_dim: int, out_dim: int, z_dim: int) -> None:
         super().__init__()
-        self.residual = nn.ModuleList()
-        self.shortcut = nn.Sequential(nn.Conv2d(in_dim, out_dim, 1))
-        if not first_block:
-            self.residual.append(nn.Upsample(scale_factor=2.0))
-            self.residual.append(nn.Conv2d(in_dim, out_dim, 3, 1, 1))
+        residual = [
+            nn.Upsample(scale_factor=2.0),
+            nn.Conv2d(in_dim, out_dim, 3, 1, 1),
             # TODO: blur layer
-            in_dim = out_dim
-
-            self.shortcut.append(nn.Upsample(scale_factor=2.0))
-
-        self.residual.extend(
-            [
-                ApplyNoise(in_dim),
-                nn.LeakyReLU(0.2, inplace=True),
-                AdaIN(in_dim, z_dim),
-                nn.Conv2d(in_dim, out_dim, 3, 1, 1),
-                ApplyNoise(out_dim),
-                nn.LeakyReLU(0.2, inplace=True),
-                AdaIN(out_dim, z_dim),
-            ]
-        )
+            ApplyNoise(out_dim),
+            nn.LeakyReLU(0.2, inplace=True),
+            AdaIN(out_dim, z_dim),
+            nn.Conv2d(out_dim, out_dim, 3, 1, 1),
+            ApplyNoise(out_dim),
+            nn.LeakyReLU(0.2, inplace=True),
+            AdaIN(out_dim, z_dim),
+        ]
+        self.residual = nn.ModuleList(residual)
+        self.shortcut = nn.Sequential(nn.Conv2d(in_dim, out_dim, 1), nn.Upsample(scale_factor=2.0))
 
     def forward(self, x: Tensor, w: Tensor) -> Tensor:
+        shortcut = self.shortcut(x)
         for layer in self.residual:
             x = layer(x, w) if isinstance(layer, AdaIN) else layer(x)
-        return x
+        return x + shortcut
 
 
 class StyleGanGenerator(nn.Module):
@@ -79,11 +73,8 @@ class StyleGanGenerator(nn.Module):
             self.mapping_network.extend([nn.Linear(z_dim, z_dim), nn.LeakyReLU(0.2, inplace=True)])
 
         self.learned_input = nn.Parameter(torch.ones(1, 512, 4, 4))
-
-        out_ch = min(base_dim * img_size // 4, 512)
         self.blocks = nn.ModuleList()
-        self.blocks.append(StyleGanGeneratorBlock(512, out_ch, z_dim, first_block=True))
-        in_ch = out_ch
+        in_ch = 512
 
         depth = int(math.log2(img_size // 4))
         for i in range(depth):
