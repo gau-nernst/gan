@@ -103,7 +103,7 @@ class StyleGanGenerator(nn.Module):
         self.apply(init_weights)
 
     def forward(self, z: Tensor):
-        w = self.mapping_network(z)
+        w = self.mapping_network(z) * 0.01
         x = self.learned_input.expand(z.shape[0], -1, -1, -1)
         for block in self.blocks:
             x = block(x, w)
