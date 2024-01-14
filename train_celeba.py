@@ -56,6 +56,7 @@ class TrainConfig:
 
     run_name: str = "dcgan_celeba"
     log_img_interval: int = 1_000
+    fid_interval: int = 5_000
 
 
 def make_parser(fn):
@@ -199,13 +200,15 @@ if __name__ == "__main__":
                 fakes = unnormalize(fakes)
                 io.write_png(fakes, f"{log_img_dir}/step{step // 1000:04d}k{suffix}.png")
 
-                def closure():
-                    zs = torch.randn(cfg.batch_size, 128, device=cfg.device)
-                    with autocast_ctx, torch.no_grad():
-                        return model(zs).float()
+        if step % cfg.fid_interval == 0:
 
-                stats = fid_scorer.compute_stats(closure)
+            def closure():
+                zs = torch.randn(cfg.batch_size, 128, device=cfg.device)
+                with autocast_ctx, torch.no_grad():
+                    return model(zs).float()
 
-                fid_score = fid_scorer.fid_score(celeba_stats, stats)
-                _suffix = "online" if suffix == "" else "ema"
-                logger.log({f"fid/{_suffix}": fid_score}, step=step)
+            stats = fid_scorer.compute_stats(closure)
+
+            fid_score = fid_scorer.fid_score(celeba_stats, stats)
+            _suffix = "online" if suffix == "" else "ema"
+            logger.log({f"fid/{_suffix}": fid_score}, step=step)
