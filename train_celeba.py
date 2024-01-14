@@ -125,7 +125,9 @@ if __name__ == "__main__":
         ]
     )
     ds = datasets.CelebA("data", transform=transform, download=True)
-    dloader = DataLoader(ds, cfg.batch_size, shuffle=True, num_workers=4, pin_memory=True, drop_last=True)
+    dloader = DataLoader(
+        ds, cfg.batch_size // cfg.grad_accum, shuffle=True, num_workers=4, pin_memory=True, drop_last=True
+    )
     dloader = cycle(dloader)
 
     autocast_ctx = torch.autocast(cfg.device, dtype=torch.bfloat16, enabled=cfg.mixed_precision)
@@ -165,7 +167,7 @@ if __name__ == "__main__":
                 cached_reals.append(reals.clone())  # cached for generator later
                 reals.requires_grad_()
 
-                zs = torch.randn(cfg.batch_size, 128, device=cfg.device)
+                zs = torch.randn(reals.shape[0], 128, device=cfg.device)
                 with autocast_ctx:
                     with torch.no_grad():
                         fakes = gen(zs)
@@ -181,7 +183,7 @@ if __name__ == "__main__":
 
         disc.requires_grad_(False)
         for i in range(cfg.grad_accum):
-            zs = torch.randn(cfg.batch_size, 128, device=cfg.device)
+            zs = torch.randn(reals.shape[0], 128, device=cfg.device)
             with autocast_ctx:
                 loss_g = criterion.g_loss(disc(gen(zs)), disc, cached_reals[i])
             loss_g.backward()
