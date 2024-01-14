@@ -54,6 +54,7 @@ class TrainConfig:
     optimizer_kwargs: dict = field(default_factory=dict)
     batch_size: int = 64
     method: str = "gan"
+    regularizer: str = "none"
     diff_augment: bool = False
 
     run_name: str = "dcgan_celeba"
@@ -108,7 +109,7 @@ if __name__ == "__main__":
 
     gen_ema = EMA(gen)
     criterion = get_loss(cfg.method)
-    regularizer = get_regularizer(cfg.method)
+    regularizer = get_regularizer(cfg.regularizer)
 
     optim_cls = getattr(torch.optim, cfg.optimizer)
     optim_d = optim_cls(disc.parameters(), cfg.lr, **cfg.optimizer_kwargs)
@@ -161,7 +162,8 @@ if __name__ == "__main__":
                 reals = reals.to(cfg.device)
                 if cfg.channels_last:
                     reals = reals.to(memory_format=torch.channels_last)
-                cached_reals.append(reals)  # cached for generator later
+                cached_reals.append(reals.clone())  # cached for generator later
+                reals.requires_grad_()
 
                 zs = torch.randn(cfg.batch_size, 128, device=cfg.device)
                 with autocast_ctx:

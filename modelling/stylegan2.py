@@ -12,7 +12,7 @@ import torch.nn.functional as F
 from torch import Tensor, nn
 
 from .progressive_gan import init_weights
-from .stylegan import ApplyNoise
+from .stylegan import Noise
 
 
 batched_conv2d = torch.vmap(F.conv2d)
@@ -45,14 +45,14 @@ class StyleGan2GeneratorBlock(nn.Module):
                 nn.Upsample(scale_factor=2.0),
                 ModulatedConv2d(in_dim, out_dim, 3, z_dim),
                 # TODO: blur
-                ApplyNoise(out_dim),
+                Noise(out_dim),
                 nn.LeakyReLU(0.2, inplace=True),
             ]
             self.layers.extend(layers)
 
         layers = [
             ModulatedConv2d(out_dim, out_dim, 3, z_dim),
-            ApplyNoise(out_dim),
+            Noise(out_dim),
             nn.LeakyReLU(0.2, inplace=True),
         ]
         self.layers.extend(layers)

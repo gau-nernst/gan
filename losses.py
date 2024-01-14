@@ -16,9 +16,10 @@ def get_loss(name: str):
 
 def get_regularizer(name: str):
     return {
+        "none": None,
         "wgan-gp": wgan_gp_regularizer,
         "r1": r1_regularizer,
-    }.get(name, None)
+    }[name]
 
 
 # https://arxiv.org/abs/1406.2661
@@ -86,7 +87,7 @@ class RelativisticGanLoss:
 # https://pytorch.org/docs/stable/notes/amp_examples.html#gradient-penalty
 def wgan_gp_regularizer(disc: nn.Module, reals: Tensor, fakes: Tensor, d_reals: Tensor) -> Tensor:
     alpha = torch.rand(reals.shape[0], 1, 1, 1, device=reals.device)
-    inter = reals.lerp(fakes.detach().float(), alpha).requires_grad_()
+    inter = reals.detach().lerp(fakes.detach().float(), alpha).requires_grad_()
     d_inter = disc(inter)
 
     with torch.autocast(reals.device.type, enabled=False):

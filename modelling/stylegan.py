@@ -14,7 +14,7 @@ from torch import Tensor, nn
 from .progressive_gan import init_weights
 
 
-class ApplyNoise(nn.Module):
+class Noise(nn.Module):
     def __init__(self, dim: int) -> None:
         super().__init__()
         self.scale = nn.Parameter(torch.zeros(dim, 1, 1))
@@ -45,11 +45,10 @@ class StyleGanGeneratorBlock(nn.Module):
             nn.LeakyReLU(0.2, inplace=True),
             nn.Upsample(scale_factor=2.0),
             nn.Conv2d(in_dim, out_dim, 3, 1, 1),
-            # TODO: blur layer
-            ApplyNoise(out_dim),
+            Noise(out_dim),
             nn.LeakyReLU(0.2, inplace=True),
             nn.Conv2d(out_dim, out_dim, 3, 1, 1),
-            ApplyNoise(out_dim),
+            Noise(out_dim),
         ]
         self.layers = nn.ModuleList(layers)
         if residual:
