@@ -27,49 +27,59 @@ class ApplyNoise(nn.Module):
 
 class AdaIN(nn.InstanceNorm2d):
     def __init__(self, dim: int, z_dim: int) -> None:
-        super().__init__(dim, eps=1e-8)
+        super().__init__(dim)
         self.style_w = nn.Linear(z_dim, dim)
         self.style_b = nn.Linear(z_dim, dim)
 
-        with torch.no_grad():
-            self.style_w.bias.add_(1)
-
-    def forward(self, x: Tensor, w_embs: Tensor) -> Tensor:
-        weight = self.style_w(w_embs).unflatten(-1, (-1, 1, 1))
-        bias = self.style_b(w_embs).unflatten(-1, (-1, 1, 1))
+    def forward(self, x: Tensor, w: Tensor) -> Tensor:
+        weight = self.style_w(w).unflatten(-1, (-1, 1, 1)) + 1
+        bias = self.style_b(w).unflatten(-1, (-1, 1, 1))
         return super().forward(x) * weight + bias
 
 
 class StyleGanGeneratorBlock(nn.Module):
-    def __init__(self, in_dim: int, out_dim: int, z_dim: int) -> None:
+    def __init__(self, in_dim: int, out_dim: int, z_dim: int, residual: bool = False) -> None:
         super().__init__()
         residual = [
+            AdaIN(in_dim, z_dim),
+            nn.LeakyReLU(0.2, inplace=True),
             nn.Upsample(scale_factor=2.0),
             nn.Conv2d(in_dim, out_dim, 3, 1, 1),
             # TODO: blur layer
             ApplyNoise(out_dim),
             nn.LeakyReLU(0.2, inplace=True),
-            AdaIN(out_dim, z_dim),
             nn.Conv2d(out_dim, out_dim, 3, 1, 1),
             ApplyNoise(out_dim),
-            nn.LeakyReLU(0.2, inplace=True),
-            AdaIN(out_dim, z_dim),
         ]
         self.residual = nn.ModuleList(residual)
-        self.shortcut = nn.Sequential(nn.Conv2d(in_dim, out_dim, 1), nn.Upsample(scale_factor=2.0))
+        if self.residual:
+            self.shortcut = nn.Sequential(nn.Conv2d(in_dim, out_dim, 1), nn.Upsample(scale_factor=2.0))
+            self.scale = nn.Parameter(torch.full((out_dim, 1, 1), 1e-4))
+        else:
+            self.shortcut = None
 
     def forward(self, x: Tensor, w: Tensor) -> Tensor:
-        shortcut = self.shortcut(x)
+        out = x
         for layer in self.residual:
-            x = layer(x, w) if isinstance(layer, AdaIN) else layer(x)
-        return x + shortcut
+            out = layer(out, w) if isinstance(layer, AdaIN) else layer(out)
+        if self.shortcut is not None:
+            out = self.shortcut(x) + out * self.scale
+        return out
 
 
 class StyleGanGenerator(nn.Module):
-    def __init__(self, img_size: int, img_channels: int = 3, z_dim: int = 128, base_dim: int = 16) -> None:
+    def __init__(
+        self,
+        img_size: int,
+        img_channels: int = 3,
+        z_dim: int = 128,
+        base_dim: int = 16,
+        mapping_network_depth: int = 8,
+        residual: bool = False,
+    ) -> None:
         super().__init__()
         self.mapping_network = nn.Sequential(nn.LayerNorm(z_dim))
-        for _ in range(8):
+        for _ in range(mapping_network_depth):
             self.mapping_network.extend([nn.Linear(z_dim, z_dim), nn.LeakyReLU(0.2, inplace=True)])
 
         self.learned_input = nn.Parameter(torch.ones(1, 512, 4, 4))
@@ -79,10 +89,14 @@ class StyleGanGenerator(nn.Module):
         depth = int(math.log2(img_size // 4))
         for i in range(depth):
             out_ch = min(base_dim * img_size // 4 // 2 ** (i + 1), 512)
-            self.blocks.append(StyleGanGeneratorBlock(in_ch, out_ch, z_dim))
+            self.blocks.append(StyleGanGeneratorBlock(in_ch, out_ch, z_dim, residual=residual))
             in_ch = out_ch
 
-        self.out_conv = nn.Conv2d(in_ch, img_channels, 1)
+        self.out_conv = nn.Sequential(
+            nn.InstanceNorm2d(in_ch),
+            nn.LeakyReLU(0.2, inplace=True),
+            nn.Conv2d(in_ch, img_channels, 1),
+        )
 
         self.reset_parameters()
 
