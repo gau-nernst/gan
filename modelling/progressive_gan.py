@@ -66,16 +66,12 @@ class ProgressiveGanDiscriminator(nn.Sequential):
             self.append(ProgressiveGanDiscriminatorBlock(in_ch, out_ch))
             in_ch = out_ch
 
-        out_ch = min(in_ch * 2, 512)
         self.append(
             nn.Sequential(
-                nn.LeakyReLU(0.2, inplace=True),
                 MinibatchStdDev(),
                 nn.Conv2d(in_ch + 1, in_ch, 3, 1, 1),
                 nn.LeakyReLU(0.2, inplace=True),
-                nn.Conv2d(in_ch, out_ch, 4),
-                nn.LeakyReLU(0.2, inplace=True),
-                nn.Conv2d(out_ch, 1, 1),
+                nn.Conv2d(in_ch, 1, 4),
                 nn.Flatten(0),
             )
         )
@@ -112,8 +108,6 @@ class ProgressiveGanGenerator(nn.Sequential):
                 nn.LayerNorm(z_dim),
                 nn.Unflatten(-1, (-1, 1, 1)),
                 nn.ConvTranspose2d(z_dim, out_ch, 4),
-                nn.LeakyReLU(0.2, inplace=True),
-                nn.Conv2d(out_ch, out_ch, 3, 1, 1),
             )
         )
         in_ch = out_ch
