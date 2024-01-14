@@ -40,7 +40,7 @@ class AdaIN(nn.InstanceNorm2d):
 class StyleGanGeneratorBlock(nn.Module):
     def __init__(self, in_dim: int, out_dim: int, z_dim: int, residual: bool = False) -> None:
         super().__init__()
-        residual = [
+        layers = [
             AdaIN(in_dim, z_dim),
             nn.LeakyReLU(0.2, inplace=True),
             nn.Upsample(scale_factor=2.0),
@@ -51,7 +51,7 @@ class StyleGanGeneratorBlock(nn.Module):
             nn.Conv2d(out_dim, out_dim, 3, 1, 1),
             ApplyNoise(out_dim),
         ]
-        self.residual = nn.ModuleList(residual)
+        self.layers = nn.ModuleList(layers)
         if residual:
             self.shortcut = nn.Sequential(nn.Conv2d(in_dim, out_dim, 1), nn.Upsample(scale_factor=2.0))
             self.scale = nn.Parameter(torch.full((out_dim, 1, 1), 1e-4))
@@ -60,7 +60,7 @@ class StyleGanGeneratorBlock(nn.Module):
 
     def forward(self, x: Tensor, w: Tensor) -> Tensor:
         out = x
-        for layer in self.residual:
+        for layer in self.layers:
             out = layer(out, w) if isinstance(layer, AdaIN) else layer(out)
         if self.shortcut is not None:
             out = self.shortcut(x) + out * self.scale

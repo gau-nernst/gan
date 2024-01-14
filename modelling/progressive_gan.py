@@ -41,7 +41,7 @@ class MinibatchStdDev(nn.Module):
 class ProgressiveGanDiscriminatorBlock(nn.Module):
     def __init__(self, in_dim: int, out_dim: int, residual: bool = False) -> None:
         super().__init__()
-        self.residual = nn.Sequential(
+        self.layers = nn.Sequential(
             nn.LeakyReLU(0.2, inplace=True),
             nn.Conv2d(in_dim, in_dim, 3, 1, 1),
             nn.LeakyReLU(0.2, inplace=True),
@@ -55,7 +55,7 @@ class ProgressiveGanDiscriminatorBlock(nn.Module):
             self.shortcut = None
 
     def forward(self, x: Tensor) -> Tensor:
-        out = self.residual(x)
+        out = self.layers(x)
         if self.shortcut is not None:
             out = self.shortcut(x) + out
         return out
@@ -92,7 +92,7 @@ class ProgressiveGanDiscriminator(nn.Sequential):
 class ProgressiveGanGeneratorBlock(nn.Module):
     def __init__(self, in_dim: int, out_dim: int, residual: bool = False) -> None:
         super().__init__()
-        self.residual = nn.Sequential(
+        self.layers = nn.Sequential(
             LayerNorm2d(in_dim),
             nn.LeakyReLU(0.2, inplace=True),
             nn.Upsample(scale_factor=2.0),
@@ -107,7 +107,7 @@ class ProgressiveGanGeneratorBlock(nn.Module):
             self.shortcut = None
 
     def forward(self, x: Tensor) -> Tensor:
-        out = self.residual(x)
+        out = self.layers(x)
         if self.shortcut is not None:
             out = self.shortcut(x) + out * self.scale
         return out
