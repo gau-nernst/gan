@@ -126,7 +126,7 @@ class ProgressiveGanGenerator(nn.Sequential):
 
         self.append(
             nn.Sequential(
-                LayerNorm2d(out_ch),
+                LayerNorm2d(in_ch),
                 nn.LeakyReLU(0.2, inplace=True),
                 nn.Conv2d(in_ch, img_channels, 1),
             )
