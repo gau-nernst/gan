@@ -6,21 +6,21 @@ Features:
 
 - GAN losses:
   - [Original GAN loss](https://arxiv.org/abs/1406.2661) (non-saturating version i.e. replace `log(1-sigmoid(d(x)))` with `logsigmoid(-d(x))`)
-  - [WGAN](https://arxiv.org/abs/1701.07875) and [WGAN-GP](https://arxiv.org/abs/1704.00028)
+  - [WGAN](https://arxiv.org/abs/1701.07875)
   - [Hinge loss](https://arxiv.org/abs/1802.05957)
   - [LSGAN](https://arxiv.org/abs/1611.04076)
   - [Relativistic GAN](https://arxiv.org/abs/1807.00734)
 - GAN regularization:
-  - R1 (StyleGAN, StyleGAN2) (TODO: remove)
+  - [R1](https://arxiv.org/abs/1801.04406)
+  - [WGAN-GP](https://arxiv.org/abs/1704.00028)
   - [DiffAuugment](https://arxiv.org/abs/2006.10738)
-  - TODO: path length regularization (StyleGAN2)
 - Architectures
   - [DCGAN](https://arxiv.org/abs/1511.06434)
   - Conditional GAN (modified for CNN) (TODO: remove)
   - NVIDIA GANs:
     - (Modified) [Progressive GAN](https://arxiv.org/pdf/1710.10196)
-    - [StyleGAN](https://arxiv.org/abs/1812.04948)
-    - [StyleGAN2](https://arxiv.org/abs/1912.04958)
+    - (Modified) [StyleGAN](https://arxiv.org/abs/1812.04948)
+    - (Modified) [StyleGAN2](https://arxiv.org/abs/1912.04958)
   - [SA-GAN](https://arxiv.org/pdf/1805.08318)
 - Img2Img:
   - Pix2Pix / CycleGAN: PatchGAN discriminator, Unet and ResNet generator
@@ -37,7 +37,7 @@ TODO:
 Notes in train script:
 
 - For mixed precision training, only bf16 is supported (so that I don't need to use gradient scaler).
-- No multi-GPU support. (most GANs don't benefit from training at a larger batch size anyway)
+- No multi-GPU support.
 
 ## Usage
 
