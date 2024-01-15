@@ -67,14 +67,20 @@ DCGAN | WGAN | 64 | 1h 7m | 28.86 | | ![dcgan_celeba_wgan](https://github.com/ga
 DCGAN | WGAN-GP | 64 | 1h 10m | 17.33 | No bn in discriminator | ![dcgan_celeba_wgan-gp](https://github.com/gau-nernst/gan/assets/26946864/7b2ba538-e05e-4f0f-b90d-0948ba18abf9)
 DCGAN | Hinge | 64 | 33m | 22.90 | (SN-GAN) No bn in discriminator. Spectral norm in discriminator | ![dcgan_celeba_sngan](https://github.com/gau-nernst/gan/assets/26946864/1a4f499c-d41e-4200-ad61-a647d0db2f72)
 DCGAN | Hinge | 64 | 34m | 19.22 | (SN-GAN w/ SA-GAN hyperparams) No bn in discriminator. Spectral norm in discriminator and generator | ![dcgan_celeba_sngan2](https://github.com/gau-nernst/gan/assets/26946864/3cebfd6f-60e9-4421-94c3-41413efa4e03)
-DCGAN | Relativistic GAN | 64 | 32m | 19.18 | No bn in discriminator. Spectral norm in discriminator | 
+DCGAN | Relativistic GAN | 64 | 32m | 19.18 | No bn in discriminator. Spectral norm in discriminator | ![dcgan_celeba_rgan2](https://github.com/gau-nernst/gan/assets/26946864/f64d2cdc-2f9e-4c7c-a43d-570058a64284)
 DCGAN | Relativistic GAN | 64 | 32m | 15.55 | | ![dcgan_celeba_rgan](https://github.com/gau-nernst/gan/assets/26946864/53c53efb-96b2-4a88-9321-3a35cd0feb83)
 (Modified) Progressive GAN | Relativistic GAN | 64 | 43m | 15.10 | | ![dcgan_celeba_progran](https://github.com/gau-nernst/gan/assets/26946864/d4987826-e728-401e-be05-801d88898a18)
 SAGAN | Hinge | 256 | 4h 38m | 7.23 | Spectral norm in discriminator and generator | ![dcgan_celeba_sagan](https://github.com/gau-nernst/gan/assets/26946864/649b56ed-1052-4102-9a1d-a417c5126aa2)
 
-DCGAN with Relativistic GAN loss on CelebA 256x256 (30k iterations)
+CelebA 256x256 (30k iterations)
+
+DCGAN with Relativistic GAN loss
 
 ![dcgan_celeba256_rgan](https://github.com/gau-nernst/gan/assets/26946864/9deaeb5d-c618-45a6-96d7-a3572ef52ba9)
+
+Progressive GAN with Hinge loss and spectral norm in Discriminator
+
+![dcgan_celeba256_progran_resDresG_hinge](https://github.com/gau-nernst/gan/assets/26946864/a71647e7-c5e9-422f-9b0d-3bbfe402a6c9)
 
 Old script
 
