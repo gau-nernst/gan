@@ -156,6 +156,7 @@ Relativistic GAN:
 
 - Simple, fast, and excellent results. It beats WGAN, WGAN-GP, and SN-GAN, while having the speed of original GAN. TODO: see if RGAN can scale well with batch size.
 - Without spectral norm, discriminator output will keep either increasing or decreasing.
+- For more complicated networks like Progressive GAN and StyleGAN architecture, especially at higher resolutions, Relativistic GAN cannot converge.
 
 Progressive GAN:
 
