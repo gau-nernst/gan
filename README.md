@@ -167,7 +167,7 @@ Relativistic GAN:
 Progressive GAN:
 
 - With fp16 mixed precision training, PixelNorm and MinibatchStdDev need to be computed in fp32 for numerical stability. This can be done simply by calling `.float()` inside `.forward()` (no-op if input is already fp32).
-- I found that Progressive GAN cannot be trained with bf16.
+- IMPORTANT: When using gradient penalty (WGAN-GP or R1) with MinibatchStdDev and mixed precision, division by zero might occur in backward pass when std is 0 (underflow). To avoid this, I have to use a custom implementation of std, with an addition of eps before performing sqrt().
 - Equalized learning rate does not seem to be important. SA-GAN, with a similar architecture, can be trained noramlly.
 - Discriminator output drift penalty is not really necessary. It helps stabilize training at the start, but doesn't improve the results later in training.
 - Mini-batch standard deviation in Discriminator and beta1=0 seem to be important
@@ -179,6 +179,7 @@ StyleGAN:
 - Blurring (upfirdn2d) is quite problematic. Using grouped convolution implementation, the 2nd order gradient calculated by PyTorch is extremely slow. This can be fixed by overriding its backward pass (by subclassing `torch.autograd.Function`) with its forward pass (they are identical). WGAN-GP loss in Progressive GAN and R1 regularization in StyleGAN/StyleGAN2 both require 2nd order gradient.
 - Most popular re-implementations like MMGeneration, rosinality, PyTorch-StudioGAN use NVIDIA's custom CUDA kernel (upfirdn2d, introduced in StyleGAN2). The custom kernel is around 1.7x faster (both forward and backward) than grouped convolution implementation at float32 precision (measured on RTX 3090). However, it doesn't support float16 precision. Thus, float16 grouped convolution implementation is faster float32 custom kernel (at least on RTX 3090).
 - More benchmark info can be found at [#1](https://github.com/gau-nernst/gan/issues/1).
+- StyleGAN is very hard to train. Without some kind of gradient penalty (R1 like in original paper, or WGAN-GP penalty like in [lucidrains' implementation](https://github.com/lucidrains/stylegan2-pytorch)), the model cannot learn at all.
 
 SA-GAN:
 

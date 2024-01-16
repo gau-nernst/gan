@@ -29,12 +29,17 @@ class MinibatchStdDev(nn.Module):
         self.group_size = group_size
 
     def forward(self, imgs: Tensor) -> Tensor:
-        imgs = imgs.float()  # always compute in fp32
         N, C, H, W = imgs.shape
-        std = imgs.view(self.group_size, -1, C, H, W).std(0, unbiased=False)
+        std = self.std(imgs.view(self.group_size, -1, C, H, W))
         std = std.mean([1, 2, 3], keepdim=True)
         std = std.repeat(self.group_size, 1, 1, 1).expand(N, 1, H, W)
         return torch.cat([imgs, std], dim=1)
+
+    # torch.std() might return 0. when doing gradient penalty, this will result in division by zero in backward pass.
+    # thus, we add eps=1e-6 before performing square root.
+    @staticmethod
+    def std(x: Tensor) -> Tensor:
+        return (x - x.mean(0)).square().sum(0).div(x.shape[0]).add(1e-6).sqrt()
 
 
 # this is identical SA-GAN, except activation function.

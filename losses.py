@@ -91,7 +91,7 @@ def wgan_gp_regularizer(disc: nn.Module, reals: Tensor, fakes: Tensor, d_reals: 
     d_inter = disc(inter)
 
     with torch.autocast(reals.device.type, enabled=False):
-        (d_grad,) = torch.autograd.grad(d_inter.sum(), inter, create_graph=True)
+        (d_grad,) = torch.autograd.grad(d_inter.float().sum(), inter, create_graph=True)
 
     d_grad_norm = torch.linalg.vector_norm(d_grad.flatten(1), dim=1)
     return (d_grad_norm - 1).square().mean() * 10
@@ -100,7 +100,7 @@ def wgan_gp_regularizer(disc: nn.Module, reals: Tensor, fakes: Tensor, d_reals: 
 # https://arxiv.org/abs/1801.04406
 def r1_regularizer(disc: nn.Module, reals: Tensor, fakes: Tensor, d_reals: Tensor) -> Tensor:
     with torch.autocast(reals.device.type, enabled=False):
-        (d_grad,) = torch.autograd.grad(d_reals.sum(), reals, create_graph=True)
+        (d_grad,) = torch.autograd.grad(d_reals.float().sum(), reals, create_graph=True)
 
     d_grad_norm2 = d_grad.square().sum() / d_grad.shape[0]
     return d_grad_norm2 * 5
