@@ -151,8 +151,7 @@ if __name__ == "__main__":
     pbar = tqdm(total=cfg.n_iters, dynamic_ncols=True)
     while step < cfg.n_iters:
         for i in range(cfg.n_disc):
-            if i == cfg.n_disc - 1:
-                cached_reals = []
+            cached_reals = [] if i == cfg.n_disc - 1 else None
 
             if cfg.method == "wgan":
                 with torch.no_grad():
@@ -164,7 +163,8 @@ if __name__ == "__main__":
                 reals = reals.to(cfg.device)
                 if cfg.channels_last:
                     reals = reals.to(memory_format=torch.channels_last)
-                cached_reals.append(reals.clone())  # cached for generator later
+                if cached_reals is not None:
+                    cached_reals.append(reals.clone())  # cached for generator later
                 reals.requires_grad_()
 
                 zs = torch.randn(reals.shape[0], 128, device=cfg.device)
