@@ -62,7 +62,7 @@ NOTE:
 Results: CelebA 64x64, 30k generator iterations, trained with bf16 on single 3070. Training time includes FID calculation, which is quite slow. EMA is used. FID is calculated using 10k samples.
 
 Model | Loss | Batch size | FID | Note | Samples
-------|------|------------|------|-----|------|--------
+------|------|------------|------|-----|--------
 DCGAN | GAN | 128 | 45.69 | | ![dcgan_celeba](https://github.com/gau-nernst/gan/assets/26946864/fcbf8e3c-8fc6-4d06-8666-0332e6314ecb)
 DCGAN | WGAN | 64 | 28.86 | | ![dcgan_celeba_wgan](https://github.com/gau-nernst/gan/assets/26946864/6ea2f607-779c-4e3d-ba19-ce956300605e)
 DCGAN | WGAN-GP | 64 | 17.33 | No bn in discriminator | ![dcgan_celeba_wgan-gp](https://github.com/gau-nernst/gan/assets/26946864/7b2ba538-e05e-4f0f-b90d-0948ba18abf9)
@@ -70,8 +70,8 @@ DCGAN | Hinge | 64 | 22.90 | (SN-GAN) No bn in discriminator. Spectral norm in d
 DCGAN | Hinge | 64 | 19.22 | (SN-GAN w/ SA-GAN hyperparams) No bn in discriminator. Spectral norm in discriminator and generator | ![dcgan_celeba_sngan2](https://github.com/gau-nernst/gan/assets/26946864/3cebfd6f-60e9-4421-94c3-41413efa4e03)
 DCGAN | Relativistic GAN | 64 | 19.18 | No bn in discriminator. Spectral norm in discriminator | ![dcgan_celeba_rgan2](https://github.com/gau-nernst/gan/assets/26946864/f64d2cdc-2f9e-4c7c-a43d-570058a64284)
 DCGAN | Relativistic GAN | 64 | 15.55 | | ![dcgan_celeba_rgan](https://github.com/gau-nernst/gan/assets/26946864/53c53efb-96b2-4a88-9321-3a35cd0feb83)
-(Modified) Progressive GAN | WGAN-GP | 64 | 18.50 | |
-SAGAN | Hinge | 256 | 4h 38m | 7.23 | Spectral norm in discriminator and generator | ![dcgan_celeba_sagan](https://github.com/gau-nernst/gan/assets/26946864/649b56ed-1052-4102-9a1d-a417c5126aa2)
+(Modified) Progressive GAN | WGAN-GP | 64 | 18.50 | |![dcgan_celeba_progran_wgan-gp](https://github.com/gau-nernst/gan/assets/26946864/5cd6fcbf-7593-4c21-86a6-983d9ff0c5d4)
+SAGAN | Hinge | 256 | 7.23 | Spectral norm in discriminator and generator | ![dcgan_celeba_sagan](https://github.com/gau-nernst/gan/assets/26946864/649b56ed-1052-4102-9a1d-a417c5126aa2)
 
 CelebA 256x256 (30k iterations)
 
