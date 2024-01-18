@@ -153,7 +153,7 @@ if __name__ == "__main__":
         for i in range(cfg.n_disc):
             cached_reals = [] if i == cfg.n_disc - 1 else None
 
-            if cfg.method == "wgan":
+            if cfg.method == "wgan" and cfg.regularizer == "none":
                 with torch.no_grad():
                     for p in disc.parameters():
                         p.clip_(-0.01, 0.01)

@@ -8,7 +8,6 @@ def get_loss(name: str):
         "gan": GanLoss,
         "lsgan": LsGanLoss,
         "wgan": WganLoss,
-        "wgan-gp": WganLoss,
         "hinge": HingeLoss,
         "relativistic-gan": RelativisticGanLoss,
     }[name]
