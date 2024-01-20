@@ -3,56 +3,53 @@
 # Code reference:
 # https://github.com/junyanz/pytorch-CycleGAN-and-pix2pix
 
-from functools import partial
-
 from torch import Tensor, nn
 
-from .base import _Act, _Norm, conv3x3, conv_norm_act
-from .dcgan import init_weights
+from .pix2pix import init_weights
 
 
 # almost identical to torchvision.models.resnet.BasicBlock
-class ResNetBlock(nn.Module):
-    def __init__(self, in_channels: int, out_channels: int, norm: _Norm, act: _Act):
-        super().__init__()
-        self.main = nn.Sequential(
-            conv_norm_act(in_channels, out_channels, conv3x3, norm, act),
-            conv_norm_act(out_channels, out_channels, conv3x3, norm, nn.Identity),
+class ResNetBlock(nn.Sequential):
+    def __init__(self, dim: int) -> None:
+        super().__init__(
+            nn.Conv2d(dim, dim, 3, 1, 1),
+            nn.InstanceNorm2d(dim),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(dim, dim, 3, 1, 1),
+            nn.InstanceNorm2d(dim),
         )
 
-    def forward(self, imgs: Tensor):
-        return imgs + self.main(imgs)
+    def forward(self, x: Tensor):
+        return x + super().forward(x)
 
 
 class ResNetGenerator(nn.Sequential):
     def __init__(
-        self,
-        A_channels: int = 3,
-        B_channels: int = 3,
-        base_channels: int = 64,
-        n_blocks: int = 9,
-        downsample: int = 2,
-        norm: _Norm = nn.InstanceNorm2d,
-        act: _Act = partial(nn.ReLU, inplace=True),
-    ):
+        self, A_channels: int = 3, B_channels: int = 3, base_dim: int = 64, n_blocks: int = 9, downsample: int = 2
+    ) -> None:
         super().__init__()
-        conv7x7 = partial(nn.Conv2d, kernel_size=7, padding=3)
-        upconv3x3 = partial(nn.ConvTranspose2d, kernel_size=3, stride=2, padding=1, output_padding=1)
-
-        self.append(conv_norm_act(A_channels, base_channels, conv7x7, norm, act))
+        self.append(nn.Conv2d(A_channels, base_dim, 7, 1, 3))
+        self.append(nn.InstanceNorm2d(base_dim))
+        self.append(nn.ReLU(inplace=True))
+        in_ch = base_dim
 
         for _ in range(downsample):
-            self.append(conv_norm_act(base_channels, base_channels * 2, conv3x3, norm, act, stride=2))
-            base_channels *= 2
+            self.append(nn.Conv2d(in_ch, in_ch * 2, 3, 2, 1))
+            self.append(nn.InstanceNorm2d(in_ch * 2))
+            self.append(nn.ReLU(inplace=True))
+            in_ch *= 2
 
         for _ in range(n_blocks):
-            self.append(ResNetBlock(base_channels, base_channels, norm, act))
+            self.append(ResNetBlock(in_ch))
 
         for _ in range(downsample):
-            self.append(conv_norm_act(base_channels, base_channels // 2, upconv3x3, norm, act))
-            base_channels //= 2
+            self.append(nn.ConvTranspose2d(in_ch, in_ch // 2, 3, 2, 1, 1))
+            self.append(nn.InstanceNorm2d(in_ch // 2))
+            self.append(nn.ReLU(inplace=True))
+            in_ch //= 2
 
-        self.append(nn.Sequential(conv7x7(base_channels, B_channels), nn.Tanh()))
+        self.append(nn.Conv2d(base_dim, B_channels, 7, 1, 3))
+        self.append(nn.Tanh())
 
         self.reset_parameters()
 
