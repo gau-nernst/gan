@@ -71,7 +71,7 @@ class DcGanGenerator(nn.Sequential):
 
 
 def init_weights(module: nn.Module):
-    if isinstance(module, nn.modules.conv._ConvNd):
+    if isinstance(module, (nn.modules.conv._ConvNd, nn.modules.conv._ConvTransposeNd)):
         nn.init.normal_(module.weight, 0, 0.02)
         if module.bias is not None:
             nn.init.zeros_(module.bias)

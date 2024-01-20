@@ -3,7 +3,7 @@ from .convnext_gan import ConvNeXtDiscriminator, ConvNeXtGenerator
 from .cyclegan import ResNetGenerator
 from .dcgan import DcGanDiscriminator, DcGanGenerator
 from .esrgan import ESRGANGenerator
-from .pix2pix import PatchGAN, UnetGenerator
+from .pix2pix import PatchGan, UnetGenerator
 from .progressive_gan import ProgressiveGanDiscriminator, ProgressiveGanGenerator
 from .sagan import SaGanDiscriminator, SaGanGenerator
 from .srgan import SRGANDiscriminator, SRResNet
@@ -36,7 +36,7 @@ def build_discriminator(name: str, *args, **kwargs):
         sagan=SaGanDiscriminator,
         convnext=ConvNeXtDiscriminator,
         cgan=CGANDiscriminator,
-        pix2pix=PatchGAN,
-        cyclegan=PatchGAN,
+        pix2pix=PatchGan,
+        cyclegan=PatchGan,
         srgan=SRGANDiscriminator,
     )[name](*args, **kwargs)

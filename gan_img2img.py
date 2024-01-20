@@ -9,7 +9,7 @@ from torch import Tensor, nn
 from torch.utils.data import DataLoader, Dataset
 
 from datasets import ImageFolderDataset
-from modelling import PatchGAN, ResNetGenerator, UnetGenerator
+from modelling import PatchGan, ResNetGenerator, UnetGenerator
 from training import BaseTrainer, BaseTrainerConfig, compute_d_loss, compute_g_loss
 from utils import add_args_from_cls, cls_from_args
 
@@ -148,14 +148,14 @@ def main():
     args = parser.parse_args()
 
     if args.model == "pix2pix":
-        dis = [PatchGAN()]
+        dis = [PatchGan()]
         gen = [UnetGenerator()]
         train_ds = AlignedDataset(f"../datasets/{args.dataset}/train")
         val_ds = AlignedDataset(f"../datasets/{args.dataset}/val")
 
     elif args.model == "cyclegan":
         # this trick does not work with torch.compile()
-        dis = [PatchGAN(), PatchGAN()]
+        dis = [PatchGan(), PatchGan()]
         gen = [ResNetGenerator(), ResNetGenerator()]
         train_ds = UnalignedDataset(f"../datasets/{args.dataset}/trainA", f"../datasets/{args.dataset}/trainB")
         val_ds = UnalignedDataset(f"../datasets/{args.dataset}/testA", f"../datasets/{args.dataset}/testB")
