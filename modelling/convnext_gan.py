@@ -35,6 +35,11 @@ class ConvNeXtDiscriminator(nn.Sequential):
         self.append(nn.Conv2d(in_ch, 1, 8))
         self.append(nn.Flatten(0))
 
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        self.apply(init_weights)
+
 
 class ConvNeXtGenerator(nn.Sequential):
     def __init__(self, img_size: int, img_channels: int = 3, z_dim: int = 128, base_dim: int = 64) -> None:
@@ -61,3 +66,14 @@ class ConvNeXtGenerator(nn.Sequential):
 
         self.append(nn.Conv2d(in_ch, img_channels, 1))
         self.append(nn.Tanh())
+
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        self.apply(init_weights)
+
+
+def init_weights(m: nn.Module):
+    if isinstance(m, (nn.Conv2d, nn.Linear)):
+        nn.init.trunc_normal_(m.weight, std=0.02)
+        nn.init.constant_(m.bias, 0)
