@@ -1,6 +1,7 @@
-import torch
-from torch import nn, Tensor
 import math
+
+import torch
+from torch import Tensor, nn
 
 
 class ConvNeXtBlock(nn.Module):
@@ -19,31 +20,44 @@ class ConvNeXtBlock(nn.Module):
         return x + out.permute(0, 3, 1, 2)
 
 
-class ConvNeXtDiscriminator(nn.Module):
-    def __init__(self, img_size: int, img_channels: int = 3, n_classes: int = 1, base_dim: int = 64) -> None:
+class ConvNeXtDiscriminator(nn.Sequential):
+    def __init__(self, img_size: int, img_channels: int = 3, base_dim: int = 64) -> None:
         super().__init__()
         depth = int(math.log2(img_size // 8))
-
-        self.blocks = nn.Sequential()
         in_ch = img_channels
 
         for i in range(depth):
             out_ch = base_dim if i == 0 else in_ch * 2
-            self.blocks.append(ConvNeXtBlock(in_ch))
+            self.append(nn.Conv2d(in_ch, out_ch, 2, 2))
+            self.append(ConvNeXtBlock(out_ch))
             in_ch = out_ch
 
-        self.blocks.append(
-            nn.Sequential(
-                nn.ReLU(inplace=True),
-                nn.Conv2d(in_ch, in_ch, 3, 1, 1),
-                nn.ReLU(inplace=True),
-                nn.Conv2d(in_ch, in_ch, 3, 1, 1),
-                nn.ReLU(inplace=True),
-            )
-        )
+        self.append(nn.Conv2d(in_ch, 1, 8))
+        self.append(nn.Flatten(0))
 
-    def forward(self, x: Tensor, y: Tensor | None = None) -> Tensor:
-        if y is None:
-            y = x.new_zeros(1, dtype=torch.long)
-        embs = self.blocks(x).sum(dim=(-1, -2))
-        return (embs * self.y_embs(y)).sum(1)
+
+class ConvNeXtGenerator(nn.Sequential):
+    def __init__(self, img_size: int, img_channels: int = 3, z_dim: int = 128, base_dim: int = 64) -> None:
+        depth = int(math.log2(img_size // 8))
+        out_ch = base_dim * 2 ** (depth - 1)
+        super().__init__(
+            nn.Sequential(
+                nn.Linear(z_dim, z_dim * 4),
+                nn.GELU(),
+                nn.Linear(z_dim * 4, z_dim),
+                nn.GELU(),
+                nn.Linear(z_dim, out_ch * 8 * 8),
+                nn.Unflatten(-1, (-1, 8, 8)),
+                nn.GELU(),
+            ),
+        )
+        in_ch = out_ch
+
+        for _ in range(depth):
+            out_ch = in_ch // 2
+            self.append(nn.ConvTranspose2d(in_ch, out_ch, 2, 2))
+            self.append(ConvNeXtBlock(out_ch))
+            in_ch = out_ch
+
+        self.append(nn.Conv2d(in_ch, img_channels, 1))
+        self.append(nn.Tanh())
