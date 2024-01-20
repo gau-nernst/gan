@@ -29,19 +29,24 @@ class MinibatchStdDev(nn.Module):
         self.group_size = group_size
 
     def forward(self, imgs: Tensor) -> Tensor:
-        imgs = imgs.float()  # always compute in fp32
         N, C, H, W = imgs.shape
-        std = imgs.view(self.group_size, -1, C, H, W).std(0, unbiased=False)
+        std = self.std(imgs.view(self.group_size, -1, C, H, W))
         std = std.mean([1, 2, 3], keepdim=True)
         std = std.repeat(self.group_size, 1, 1, 1).expand(N, 1, H, W)
         return torch.cat([imgs, std], dim=1)
+
+    # torch.std() might return 0. when doing gradient penalty, this will result in division by zero in backward pass.
+    # thus, we add eps=1e-6 before performing square root.
+    @staticmethod
+    def std(x: Tensor) -> Tensor:
+        return (x - x.mean(0)).square().sum(0).div(x.shape[0]).add(1e-6).sqrt()
 
 
 # this is identical SA-GAN, except activation function.
 class ProgressiveGanDiscriminatorBlock(nn.Module):
     def __init__(self, in_dim: int, out_dim: int) -> None:
         super().__init__()
-        self.residual = nn.Sequential(
+        self.layers = nn.Sequential(
             nn.LeakyReLU(0.2, inplace=True),
             nn.Conv2d(in_dim, in_dim, 3, 1, 1),
             nn.LeakyReLU(0.2, inplace=True),
@@ -49,9 +54,10 @@ class ProgressiveGanDiscriminatorBlock(nn.Module):
             nn.AvgPool2d(2),
         )
         self.shortcut = nn.Sequential(nn.AvgPool2d(2), nn.Conv2d(in_dim, out_dim, 1))
+        self.scale = nn.Parameter(torch.full((out_dim, 1, 1), 1e-4))
 
     def forward(self, x: Tensor) -> Tensor:
-        return self.residual(x) + self.shortcut(x)
+        return self.shortcut(x) + self.layers(x) * self.scale
 
 
 class ProgressiveGanDiscriminator(nn.Sequential):
@@ -66,16 +72,12 @@ class ProgressiveGanDiscriminator(nn.Sequential):
             self.append(ProgressiveGanDiscriminatorBlock(in_ch, out_ch))
             in_ch = out_ch
 
-        out_ch = min(in_ch * 2, 512)
         self.append(
             nn.Sequential(
-                nn.LeakyReLU(0.2, inplace=True),
                 MinibatchStdDev(),
                 nn.Conv2d(in_ch + 1, in_ch, 3, 1, 1),
                 nn.LeakyReLU(0.2, inplace=True),
-                nn.Conv2d(in_ch, out_ch, 4),
-                nn.LeakyReLU(0.2, inplace=True),
-                nn.Conv2d(out_ch, 1, 1),
+                nn.Conv2d(in_ch, 1, 4),
                 nn.Flatten(0),
             )
         )
@@ -89,7 +91,7 @@ class ProgressiveGanDiscriminator(nn.Sequential):
 class ProgressiveGanGeneratorBlock(nn.Module):
     def __init__(self, in_dim: int, out_dim: int) -> None:
         super().__init__()
-        self.residual = nn.Sequential(
+        self.layers = nn.Sequential(
             LayerNorm2d(in_dim),
             nn.LeakyReLU(0.2, inplace=True),
             nn.Upsample(scale_factor=2.0),
@@ -98,9 +100,10 @@ class ProgressiveGanGeneratorBlock(nn.Module):
             nn.Conv2d(out_dim, out_dim, 3, 1, 1),
         )
         self.shortcut = nn.Sequential(nn.Conv2d(in_dim, out_dim, 1), nn.Upsample(scale_factor=2.0))
+        self.scale = nn.Parameter(torch.full((out_dim, 1, 1), 1e-4))
 
     def forward(self, x: Tensor) -> Tensor:
-        return self.residual(x) + self.shortcut(x)
+        return self.shortcut(x) + self.layers(x) * self.scale
 
 
 class ProgressiveGanGenerator(nn.Sequential):
@@ -112,8 +115,6 @@ class ProgressiveGanGenerator(nn.Sequential):
                 nn.LayerNorm(z_dim),
                 nn.Unflatten(-1, (-1, 1, 1)),
                 nn.ConvTranspose2d(z_dim, out_ch, 4),
-                nn.LeakyReLU(0.2, inplace=True),
-                nn.Conv2d(out_ch, out_ch, 3, 1, 1),
             )
         )
         in_ch = out_ch
@@ -126,7 +127,7 @@ class ProgressiveGanGenerator(nn.Sequential):
 
         self.append(
             nn.Sequential(
-                LayerNorm2d(out_ch),
+                LayerNorm2d(in_ch),
                 nn.LeakyReLU(0.2, inplace=True),
                 nn.Conv2d(in_ch, img_channels, 1),
             )
@@ -140,6 +141,6 @@ class ProgressiveGanGenerator(nn.Sequential):
 
 def init_weights(module: nn.Module):
     if isinstance(module, (nn.modules.conv._ConvNd, nn.Linear)):
-        nn.init.kaiming_normal_(module.weight, a=0.2)
+        nn.init.kaiming_normal_(module.weight)
         if module.bias is not None:
             nn.init.zeros_(module.bias)

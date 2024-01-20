@@ -40,12 +40,7 @@ class DcGanDiscriminator(nn.Sequential):
 
 class DcGanGenerator(nn.Sequential):
     def __init__(
-        self,
-        img_channels: int = 3,
-        img_size: int = 64,
-        base_dim: int = 64,
-        z_dim: int = 128,
-        norm: str = "bn",
+        self, img_channels: int = 3, img_size: int = 64, base_dim: int = 64, z_dim: int = 128, norm: str = "bn"
     ) -> None:
         depth = int(math.log2(img_size / 4))  # upsample from 4x4 to img_size
         out_ch = base_dim * 2 ** (depth - 1)

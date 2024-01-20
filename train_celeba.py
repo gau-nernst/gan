@@ -15,7 +15,7 @@ from tqdm import tqdm
 from diff_augment import DiffAugment
 from ema import EMA
 from fid import FID
-from losses import get_gan_loss
+from losses import get_loss, get_regularizer
 from modelling import build_discriminator, build_generator
 
 
@@ -44,6 +44,9 @@ class TrainConfig:
 
     device: str = "cuda" if torch.cuda.is_available() else "cpu"
     mixed_precision: bool = False
+    channels_last: bool = False
+    compile: bool = False
+    grad_accum: int = 1
     n_iters: int = 30_000
     n_disc: int = 1
     lr: float = 2e-4
@@ -51,10 +54,12 @@ class TrainConfig:
     optimizer_kwargs: dict = field(default_factory=dict)
     batch_size: int = 64
     method: str = "gan"
+    regularizer: str = "none"
     diff_augment: bool = False
 
     run_name: str = "dcgan_celeba"
     log_img_interval: int = 1_000
+    fid_interval: int = 5_000
 
 
 def make_parser(fn):
@@ -89,18 +94,22 @@ if __name__ == "__main__":
 
     disc = build_discriminator(cfg.model, img_size=cfg.img_size, **cfg.disc_kwargs).to(cfg.device)
     gen = build_generator(cfg.model, img_size=cfg.img_size, **cfg.gen_kwargs).to(cfg.device)
-    if cfg.sn_disc:
-        disc.apply(apply_spectral_norm)
-    if cfg.sn_gen:
-        gen.apply(apply_spectral_norm)
-    if cfg.diff_augment:
-        disc = nn.Sequential(DiffAugment(), disc)
+    disc.apply(apply_spectral_norm) if cfg.sn_disc else None
+    gen.apply(apply_spectral_norm) if cfg.sn_gen else None
+    disc = nn.Sequential(DiffAugment(), disc) if cfg.diff_augment else disc
+    if cfg.channels_last:
+        gen.to(memory_format=torch.channels_last)
+        disc.to(memory_format=torch.channels_last)
+    if cfg.compile:
+        gen.compile()
+        disc.compile()
 
     print(disc)
     print(gen)
 
     gen_ema = EMA(gen)
-    criterion = get_gan_loss(cfg.method)
+    criterion = get_loss(cfg.method)
+    regularizer = get_regularizer(cfg.regularizer)
 
     optim_cls = getattr(torch.optim, cfg.optimizer)
     optim_d = optim_cls(disc.parameters(), cfg.lr, **cfg.optimizer_kwargs)
@@ -116,7 +125,9 @@ if __name__ == "__main__":
         ]
     )
     ds = datasets.CelebA("data", transform=transform, download=True)
-    dloader = DataLoader(ds, cfg.batch_size, shuffle=True, num_workers=4, pin_memory=True, drop_last=True)
+    dloader = DataLoader(
+        ds, cfg.batch_size // cfg.grad_accum, shuffle=True, num_workers=4, pin_memory=True, drop_last=True
+    )
     dloader = cycle(dloader)
 
     autocast_ctx = torch.autocast(cfg.device, dtype=torch.bfloat16, enabled=cfg.mixed_precision)
@@ -139,24 +150,43 @@ if __name__ == "__main__":
     step = 0  # generator update step
     pbar = tqdm(total=cfg.n_iters, dynamic_ncols=True)
     while step < cfg.n_iters:
-        for _ in range(cfg.n_disc):
-            reals, _ = next(dloader)
-            reals = reals.to(cfg.device)
+        for i in range(cfg.n_disc):
+            cached_reals = [] if i == cfg.n_disc - 1 else None
 
-            zs = torch.randn(cfg.batch_size, 128, device=cfg.device)
-            with autocast_ctx:
+            if cfg.method == "wgan" and cfg.regularizer == "none":
                 with torch.no_grad():
-                    fakes = gen(zs)
-                loss_d, d_reals, d_fakes = criterion.d_loss(disc, reals, fakes)
-            loss_d.backward()
+                    for p in disc.parameters():
+                        p.clip_(-0.01, 0.01)
+
+            for _ in range(cfg.grad_accum):
+                reals, _ = next(dloader)
+                reals = reals.to(cfg.device)
+                if cfg.channels_last:
+                    reals = reals.to(memory_format=torch.channels_last)
+                if cached_reals is not None:
+                    cached_reals.append(reals.clone())  # cached for generator later
+                reals.requires_grad_()
+
+                zs = torch.randn(reals.shape[0], 128, device=cfg.device)
+                with autocast_ctx:
+                    with torch.no_grad():
+                        fakes = gen(zs)
+                    d_reals = disc(reals)
+                    d_fakes = disc(fakes)
+                    loss_d = criterion.d_loss(d_reals, d_fakes)
+                    if regularizer is not None:
+                        loss_d += regularizer(disc, reals, fakes, d_reals)
+                loss_d.backward()
+
             optim_d.step()
             optim_d.zero_grad()
 
         disc.requires_grad_(False)
-        zs = torch.randn(cfg.batch_size, 128, device=cfg.device)
-        with autocast_ctx:
-            loss_g = criterion.g_loss(disc(gen(zs)), disc, reals)
-        loss_g.backward()
+        for i in range(cfg.grad_accum):
+            zs = torch.randn(reals.shape[0], 128, device=cfg.device)
+            with autocast_ctx:
+                loss_g = criterion.g_loss(disc(gen(zs)), disc, cached_reals[i])
+            loss_g.backward()
         optim_g.step()
         optim_g.zero_grad()
         disc.requires_grad_(True)
@@ -181,13 +211,13 @@ if __name__ == "__main__":
                 fakes = unnormalize(fakes)
                 io.write_png(fakes, f"{log_img_dir}/step{step // 1000:04d}k{suffix}.png")
 
-                def closure():
-                    zs = torch.randn(cfg.batch_size, 128, device=cfg.device)
-                    with autocast_ctx, torch.no_grad():
-                        return model(zs).float()
+        if step % cfg.fid_interval == 0:
 
-                stats = fid_scorer.compute_stats(closure)
+            def closure():
+                zs = torch.randn(cfg.batch_size, 128, device=cfg.device)
+                with autocast_ctx, torch.no_grad():
+                    return gen_ema(zs).float()
 
-                fid_score = fid_scorer.fid_score(celeba_stats, stats)
-                _suffix = "online" if suffix == "" else "ema"
-                logger.log({f"fid/{_suffix}": fid_score}, step=step)
+            stats = fid_scorer.compute_stats(closure)
+            fid_score = fid_scorer.fid_score(celeba_stats, stats)
+            logger.log({"fid/ema": fid_score}, step=step)

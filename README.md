@@ -6,21 +6,22 @@ Features:
 
 - GAN losses:
   - [Original GAN loss](https://arxiv.org/abs/1406.2661) (non-saturating version i.e. replace `log(1-sigmoid(d(x)))` with `logsigmoid(-d(x))`)
-  - [WGAN](https://arxiv.org/abs/1701.07875) and [WGAN-GP](https://arxiv.org/abs/1704.00028)
+  - [WGAN](https://arxiv.org/abs/1701.07875)
   - [Hinge loss](https://arxiv.org/abs/1802.05957)
   - [LSGAN](https://arxiv.org/abs/1611.04076)
   - [Relativistic GAN](https://arxiv.org/abs/1807.00734)
 - GAN regularization:
-  - R1 (StyleGAN, StyleGAN2) (TODO: remove)
+  - [WGAN-GP](https://arxiv.org/abs/1704.00028)
+  - [R1](https://arxiv.org/abs/1801.04406)
+- Others:
   - [DiffAuugment](https://arxiv.org/abs/2006.10738)
-  - TODO: path length regularization (StyleGAN2)
 - Architectures
   - [DCGAN](https://arxiv.org/abs/1511.06434)
   - Conditional GAN (modified for CNN) (TODO: remove)
   - NVIDIA GANs:
     - (Modified) [Progressive GAN](https://arxiv.org/pdf/1710.10196)
-    - [StyleGAN](https://arxiv.org/abs/1812.04948)
-    - [StyleGAN2](https://arxiv.org/abs/1912.04958)
+    - (Modified) [StyleGAN](https://arxiv.org/abs/1812.04948)
+    - (Modified) [StyleGAN2](https://arxiv.org/abs/1912.04958)
   - [SA-GAN](https://arxiv.org/pdf/1805.08318)
 - Img2Img:
   - Pix2Pix / CycleGAN: PatchGAN discriminator, Unet and ResNet generator
@@ -37,43 +38,50 @@ TODO:
 Notes in train script:
 
 - For mixed precision training, only bf16 is supported (so that I don't need to use gradient scaler).
-- No multi-GPU support. (most GANs don't benefit from training at a larger batch size anyway)
+- No multi-GPU support.
 
 ## Usage
 
 New script
 
 ```bash
-python train_celeba.py --run_name dcgan_celeba --lr 2e-5 --optimizer Adam --optimizer_kwargs '{"betas":[0.5,0.999]}' --batch_size 128 --mixed_precision
-python train_celeba.py --run_name dcgan_celeba_wgan --lr 5e-5 --optimizer RMSprop --batch_size 64 --n_disc 5 --method wgan --mixed_precision
-python train_celeba.py --run_name dcgan_celeba_wgan-gp --disc_kwargs '{"norm":"none"}' --lr 1e-4 --optimizer Adam --optimizer_kwargs '{"betas":[0,0.9]}' --batch_size 64 --n_disc 5 --method wgan-gp --mixed_precision
-python train_celeba.py --run_name dcgan_celeba_sngan --disc_kwargs '{"norm":"none"}' --sn_disc --lr 1e-4 --optimizer Adam --optimizer_kwargs '{"betas":[0.5,0.999]}' --batch_size 64 --method hinge --mixed_precision
-python train_celeba.py --run_name dcgan_celeba_rgan --lr 2e-4 --optimizer Adam --optimizer_kwargs '{"betas":[0.5,0.999]}' --batch_size 64 --method rgan --mixed_precision
-python train_celeba.py --run_name dcgan_celeba_sagan --model sagan --sn_disc --sn_gen --lr 2e-4 --optimizer Adam --optimizer_kwargs '{"betas":[0,0.9]}' --batch_size 256 --method hinge --mixed_precision
-python train_celeba.py --run_name dcgan_celeba_progran --model progressive_gan --lr 2e-4 --optimizer Adam --optimizer_kwargs '{"betas":[0.5,0.999]}' --batch_size 64 --method rgan --mixed_precision
+python train_celeba.py --run_name dcgan_celeba --lr 2e-5 --optimizer Adam --optimizer_kwargs '{"betas":[0.5,0.999]}' --batch_size 128 --mixed_precision --channels_last
+python train_celeba.py --run_name dcgan_celeba_wgan --lr 5e-5 --optimizer RMSprop --batch_size 64 --n_disc 5 --method wgan --mixed_precision --channels_last
+python train_celeba.py --run_name dcgan_celeba_wgan-gp --disc_kwargs '{"norm":"none"}' --lr 1e-4 --optimizer Adam --optimizer_kwargs '{"betas":[0,0.9]}' --batch_size 64 --n_disc 5 --method wgan --regularizer wgan-gp --mixed_precision --channels_last
+python train_celeba.py --run_name dcgan_celeba_sngan --disc_kwargs '{"norm":"none"}' --sn_disc --lr 1e-4 --optimizer Adam --optimizer_kwargs '{"betas":[0.5,0.999]}' --batch_size 64 --method hinge --mixed_precision --channels_last
+python train_celeba.py --run_name dcgan_celeba_rgan --disc_kwargs '{"norm":"none"}' --sn_disc --lr 2e-4 --optimizer Adam --optimizer_kwargs '{"betas":[0.5,0.999]}' --batch_size 64 --method relativistic-gan --mixed_precision --channels_last
+python train_celeba.py --run_name dcgan_celeba_sagan --model sagan --sn_disc --sn_gen --lr 2e-4 --optimizer Adam --optimizer_kwargs '{"betas":[0,0.9]}' --batch_size 256 --method hinge --mixed_precision --channels_last
+python train_celeba.py --run_name progan_celeba_hinge --model progressive_gan --disc_kwargs '{"base_dim":64}' --sn_disc --gen_kwargs '{"base_dim":64}' --sn_gen --lr 2e-4 --optimizer Adam --optimizer_kwargs '{"betas":[0,0.9]}' --batch_size 64 --method hinge --mixed_precision --channels_last
+python train_celeba.py --run_name stylegan_celeba_hinge_r1 --model stylegan --disc_kwargs '{"base_dim":64}' --gen_kwargs '{"base_dim":64}' --lr 2e-4 --optimizer Adam --optimizer_kwargs '{"betas":[0,0.9]}' --batch_size 64 --method hinge --regularizer r1 --mixed_precision --channels_last
 ```
 
 NOTE:
 - SN-GAN didn't exactly use DCGAN architecture.
 - SAGAN uses different learning rates for Generator (1e-4) and Discriminator (4e-4). 
-- Relativistic GAN is used to train Progressive GAN instead of WGAN-GP. Also, there is no progressive growing.
+- Progressive GAN: No progressive growing and equalized learning rate. With residual discriminator and generator. Trained with SA-GAN hyperparameters (Hinge loss, spectral norm for both discriminator and generator).
 
 Results: CelebA 64x64, 30k generator iterations, trained with bf16 on single 3070. Training time includes FID calculation, which is quite slow. EMA is used. FID is calculated using 10k samples.
 
-Model | Loss | Batch size | Time | FID | Note | Samples
-------|------|------------|------|-----|------|--------
-DCGAN | GAN | 128 | 38m | 45.69 | | ![dcgan_celeba](https://github.com/gau-nernst/gan/assets/26946864/fcbf8e3c-8fc6-4d06-8666-0332e6314ecb)
-DCGAN | WGAN | 64 | 1h 7m | 28.86 | | ![dcgan_celeba_wgan](https://github.com/gau-nernst/gan/assets/26946864/6ea2f607-779c-4e3d-ba19-ce956300605e)
-DCGAN | WGAN-GP | 64 | 1h 10m | 17.33 | No bn in discriminator | ![dcgan_celeba_wgan-gp](https://github.com/gau-nernst/gan/assets/26946864/7b2ba538-e05e-4f0f-b90d-0948ba18abf9)
-DCGAN | Hinge | 64 | 33m | 22.90 | (SN-GAN) No bn in discriminator. Spectral norm in discriminator | ![dcgan_celeba_sngan](https://github.com/gau-nernst/gan/assets/26946864/1a4f499c-d41e-4200-ad61-a647d0db2f72)
-DCGAN | Hinge | 64 | 34m | 19.22 | (SN-GAN w/ SA-GAN hyperparams) No bn in discriminator. Spectral norm in discriminator and generator | ![dcgan_celeba_sngan2](https://github.com/gau-nernst/gan/assets/26946864/3cebfd6f-60e9-4421-94c3-41413efa4e03)
-DCGAN | Relativistic GAN | 64 | 32m | 15.55 | | ![dcgan_celeba_rgan](https://github.com/gau-nernst/gan/assets/26946864/53c53efb-96b2-4a88-9321-3a35cd0feb83)
-(Modified) Progressive GAN | Relativistic GAN | 64 | 43m | 15.10 | | ![dcgan_celeba_progran](https://github.com/gau-nernst/gan/assets/26946864/d4987826-e728-401e-be05-801d88898a18)
-SAGAN | Hinge | 256 | 4h 38m | 7.23 | Spectral norm in discriminator and generator | ![dcgan_celeba_sagan](https://github.com/gau-nernst/gan/assets/26946864/649b56ed-1052-4102-9a1d-a417c5126aa2)
+Model | Loss | Batch size | FID | Note | Samples
+------|------|------------|------|-----|--------
+DCGAN | GAN | 128 | 45.69 | | ![dcgan_celeba](https://github.com/gau-nernst/gan/assets/26946864/fcbf8e3c-8fc6-4d06-8666-0332e6314ecb)
+DCGAN | WGAN | 64 | 28.86 | | ![dcgan_celeba_wgan](https://github.com/gau-nernst/gan/assets/26946864/6ea2f607-779c-4e3d-ba19-ce956300605e)
+DCGAN | WGAN-GP | 64 | 17.33 | No bn in discriminator | ![dcgan_celeba_wgan-gp](https://github.com/gau-nernst/gan/assets/26946864/7b2ba538-e05e-4f0f-b90d-0948ba18abf9)
+DCGAN | Hinge | 64 | 22.90 | (SN-GAN) No bn in discriminator. Spectral norm in discriminator | ![dcgan_celeba_sngan](https://github.com/gau-nernst/gan/assets/26946864/1a4f499c-d41e-4200-ad61-a647d0db2f72)
+DCGAN | Hinge | 64 | 19.22 | (SN-GAN w/ SA-GAN hyperparams) No bn in discriminator. Spectral norm in discriminator and generator | ![dcgan_celeba_sngan2](https://github.com/gau-nernst/gan/assets/26946864/3cebfd6f-60e9-4421-94c3-41413efa4e03)
+DCGAN | Relativistic GAN | 64 | 19.18 | No bn in discriminator. Spectral norm in discriminator | ![dcgan_celeba_rgan2](https://github.com/gau-nernst/gan/assets/26946864/f64d2cdc-2f9e-4c7c-a43d-570058a64284)
+DCGAN | Relativistic GAN | 64 | 15.55 | | ![dcgan_celeba_rgan](https://github.com/gau-nernst/gan/assets/26946864/53c53efb-96b2-4a88-9321-3a35cd0feb83)
+SAGAN | Hinge | 256 | 7.23 | Spectral norm in discriminator and generator | ![dcgan_celeba_sagan](https://github.com/gau-nernst/gan/assets/26946864/649b56ed-1052-4102-9a1d-a417c5126aa2)
 
-DCGAN with Relativistic GAN loss on CelebA 256x256 (30k iterations)
+CelebA 256x256 (30k iterations)
+
+DCGAN with Relativistic GAN loss
 
 ![dcgan_celeba256_rgan](https://github.com/gau-nernst/gan/assets/26946864/9deaeb5d-c618-45a6-96d7-a3572ef52ba9)
+
+Progressive GAN with Hinge loss and spectral norm in Discriminator
+
+![dcgan_celeba256_progran_resDresG_hinge](https://github.com/gau-nernst/gan/assets/26946864/a71647e7-c5e9-422f-9b0d-3bbfe402a6c9)
 
 Old script
 
@@ -151,12 +159,16 @@ WGAN and WGAN-GP:
 - It is necessary to train Discriminator more than Generator (so that Discriminator is a good EMD estimator given a fixed Generator), otherwise Discriminator may collapse `D(x) = D(G(z))`.
 - They are not always better than the original GAN loss, while requiring longer training (at least 2x slower). Calculate 2nd order derivative is also expensive (for WGAN-GP).
 
-Relativistic GAN: simple, fast, and excellent results. It beats WGAN, WGAN-GP, and SN-GAN, while having the speed of original GAN. TODO: see if RGAN can scale well with batch size.
+Relativistic GAN:
+
+- Simple, fast, and excellent results. It beats WGAN, WGAN-GP, and SN-GAN, while having the speed of original GAN. TODO: see if RGAN can scale well with batch size.
+- Without spectral norm, discriminator output will keep either increasing or decreasing.
+- For more complicated networks like Progressive GAN and StyleGAN architecture, especially at higher resolutions, Relativistic GAN cannot converge.
 
 Progressive GAN:
 
 - With fp16 mixed precision training, PixelNorm and MinibatchStdDev need to be computed in fp32 for numerical stability. This can be done simply by calling `.float()` inside `.forward()` (no-op if input is already fp32).
-- I found that Progressive GAN cannot be trained with bf16.
+- IMPORTANT: When using gradient penalty (WGAN-GP or R1) with MinibatchStdDev and mixed precision, division by zero might occur in backward pass when std is 0 (underflow). To avoid this, I have to use a custom implementation of std, with an addition of eps before performing sqrt().
 - Equalized learning rate does not seem to be important. SA-GAN, with a similar architecture, can be trained noramlly.
 - Discriminator output drift penalty is not really necessary. It helps stabilize training at the start, but doesn't improve the results later in training.
 - Mini-batch standard deviation in Discriminator and beta1=0 seem to be important
@@ -168,6 +180,7 @@ StyleGAN:
 - Blurring (upfirdn2d) is quite problematic. Using grouped convolution implementation, the 2nd order gradient calculated by PyTorch is extremely slow. This can be fixed by overriding its backward pass (by subclassing `torch.autograd.Function`) with its forward pass (they are identical). WGAN-GP loss in Progressive GAN and R1 regularization in StyleGAN/StyleGAN2 both require 2nd order gradient.
 - Most popular re-implementations like MMGeneration, rosinality, PyTorch-StudioGAN use NVIDIA's custom CUDA kernel (upfirdn2d, introduced in StyleGAN2). The custom kernel is around 1.7x faster (both forward and backward) than grouped convolution implementation at float32 precision (measured on RTX 3090). However, it doesn't support float16 precision. Thus, float16 grouped convolution implementation is faster float32 custom kernel (at least on RTX 3090).
 - More benchmark info can be found at [#1](https://github.com/gau-nernst/gan/issues/1).
+- StyleGAN is very hard to train. Without some kind of gradient penalty (R1 like in original paper, or WGAN-GP penalty like in [lucidrains' implementation](https://github.com/lucidrains/stylegan2-pytorch)), the model cannot learn at all.
 
 SA-GAN:
 
