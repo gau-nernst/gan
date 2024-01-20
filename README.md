@@ -51,13 +51,14 @@ python train_celeba.py --run_name dcgan_celeba_wgan-gp --disc_kwargs '{"norm":"n
 python train_celeba.py --run_name dcgan_celeba_sngan --disc_kwargs '{"norm":"none"}' --sn_disc --lr 1e-4 --optimizer Adam --optimizer_kwargs '{"betas":[0.5,0.999]}' --batch_size 64 --method hinge --mixed_precision --channels_last
 python train_celeba.py --run_name dcgan_celeba_rgan --disc_kwargs '{"norm":"none"}' --sn_disc --lr 2e-4 --optimizer Adam --optimizer_kwargs '{"betas":[0.5,0.999]}' --batch_size 64 --method relativistic-gan --mixed_precision --channels_last
 python train_celeba.py --run_name dcgan_celeba_sagan --model sagan --sn_disc --sn_gen --lr 2e-4 --optimizer Adam --optimizer_kwargs '{"betas":[0,0.9]}' --batch_size 256 --method hinge --mixed_precision --channels_last
-python train_celeba.py --run_name dcgan_celeba_progran --model progressive_gan --lr 2e-4 --optimizer Adam --optimizer_kwargs '{"betas":[0,0.99]}' --batch_size 64 --method wgan --regularizer wgan-gp --mixed_precision --channels_last
+python train_celeba.py --run_name progan_celeba_hinge --model progressive_gan --disc_kwargs '{"base_dim":64,"residual":true}' --sn_disc --gen_kwargs '{"base_dim":64,"residual":true}' --sn_gen --lr 2e-4 --optimizer Adam --optimizer_kwargs '{"betas":[0,0.9]}' --batch_size 64 --method hinge --mixed_precision --channels_last
+python train_celeba.py --run_name stylegan_celeba_hinge_r1 --model stylegan --disc_kwargs '{"base_dim":64,"residual":true}' --gen_kwargs '{"base_dim":64}' --lr 2e-4 --optimizer Adam --optimizer_kwargs '{"betas":[0,0.9]}' --batch_size 64 --method hinge --regularizer r1 --mixed_precision --channels_last
 ```
 
 NOTE:
 - SN-GAN didn't exactly use DCGAN architecture.
 - SAGAN uses different learning rates for Generator (1e-4) and Discriminator (4e-4). 
-- Relativistic GAN is used to train Progressive GAN instead of WGAN-GP. Also, there is no progressive growing.
+- Progressive GAN: No progressive growing and equalized learning rate. With residual discriminator and generator. Trained with SA-GAN hyperparameters (Hinge loss, spectral norm for both discriminator and generator).
 
 Results: CelebA 64x64, 30k generator iterations, trained with bf16 on single 3070. Training time includes FID calculation, which is quite slow. EMA is used. FID is calculated using 10k samples.
 
@@ -70,7 +71,6 @@ DCGAN | Hinge | 64 | 22.90 | (SN-GAN) No bn in discriminator. Spectral norm in d
 DCGAN | Hinge | 64 | 19.22 | (SN-GAN w/ SA-GAN hyperparams) No bn in discriminator. Spectral norm in discriminator and generator | ![dcgan_celeba_sngan2](https://github.com/gau-nernst/gan/assets/26946864/3cebfd6f-60e9-4421-94c3-41413efa4e03)
 DCGAN | Relativistic GAN | 64 | 19.18 | No bn in discriminator. Spectral norm in discriminator | ![dcgan_celeba_rgan2](https://github.com/gau-nernst/gan/assets/26946864/f64d2cdc-2f9e-4c7c-a43d-570058a64284)
 DCGAN | Relativistic GAN | 64 | 15.55 | | ![dcgan_celeba_rgan](https://github.com/gau-nernst/gan/assets/26946864/53c53efb-96b2-4a88-9321-3a35cd0feb83)
-(Modified) Progressive GAN | WGAN-GP | 64 | 18.50 | |![dcgan_celeba_progran_wgan-gp](https://github.com/gau-nernst/gan/assets/26946864/5cd6fcbf-7593-4c21-86a6-983d9ff0c5d4)
 SAGAN | Hinge | 256 | 7.23 | Spectral norm in discriminator and generator | ![dcgan_celeba_sagan](https://github.com/gau-nernst/gan/assets/26946864/649b56ed-1052-4102-9a1d-a417c5126aa2)
 
 CelebA 256x256 (30k iterations)

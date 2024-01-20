@@ -39,7 +39,7 @@ class AdaIN(nn.InstanceNorm2d):
 
 class StyleGanGeneratorBlock(nn.ModuleList):
     def __init__(self, in_dim: int, out_dim: int, z_dim: int) -> None:
-        super().__init__(
+        layers = [
             AdaIN(in_dim, z_dim),
             nn.LeakyReLU(0.2, inplace=True),
             nn.Upsample(scale_factor=2.0),
@@ -48,7 +48,8 @@ class StyleGanGeneratorBlock(nn.ModuleList):
             nn.LeakyReLU(0.2, inplace=True),
             nn.Conv2d(out_dim, out_dim, 3, 1, 1),
             Noise(out_dim),
-        )
+        ]
+        super().__init__(layers)
 
     def forward(self, x: Tensor, w: Tensor) -> Tensor:
         for layer in self:
@@ -64,7 +65,6 @@ class StyleGanGenerator(nn.Module):
         z_dim: int = 128,
         base_dim: int = 16,
         mapping_network_depth: int = 8,
-        residual: bool = False,
     ) -> None:
         super().__init__()
         self.mapping_network = nn.Sequential(nn.LayerNorm(z_dim))
@@ -78,7 +78,7 @@ class StyleGanGenerator(nn.Module):
         depth = int(math.log2(img_size // 4))
         for i in range(depth):
             out_ch = min(base_dim * img_size // 4 // 2 ** (i + 1), 512)
-            self.blocks.append(StyleGanGeneratorBlock(in_ch, out_ch, z_dim, residual=residual))
+            self.blocks.append(StyleGanGeneratorBlock(in_ch, out_ch, z_dim))
             in_ch = out_ch
 
         self.out_conv = nn.Sequential(
