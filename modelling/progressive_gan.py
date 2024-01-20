@@ -44,7 +44,7 @@ class MinibatchStdDev(nn.Module):
 
 # this is identical SA-GAN, except activation function.
 class ProgressiveGanDiscriminatorBlock(nn.Module):
-    def __init__(self, in_dim: int, out_dim: int, residual: bool = False) -> None:
+    def __init__(self, in_dim: int, out_dim: int) -> None:
         super().__init__()
         self.layers = nn.Sequential(
             nn.LeakyReLU(0.2, inplace=True),
@@ -53,21 +53,15 @@ class ProgressiveGanDiscriminatorBlock(nn.Module):
             nn.Conv2d(in_dim, out_dim, 3, 1, 1),
             nn.AvgPool2d(2),
         )
-        if residual:
-            self.shortcut = nn.Sequential(nn.AvgPool2d(2), nn.Conv2d(in_dim, out_dim, 1))
-            self.scale = nn.Parameter(torch.full((out_dim, 1, 1), 1e-4))
-        else:
-            self.shortcut = None
+        self.shortcut = nn.Sequential(nn.AvgPool2d(2), nn.Conv2d(in_dim, out_dim, 1))
+        self.scale = nn.Parameter(torch.full((out_dim, 1, 1), 1e-4))
 
     def forward(self, x: Tensor) -> Tensor:
-        out = self.layers(x)
-        if self.shortcut is not None:
-            out = self.shortcut(x) + out
-        return out
+        return self.shortcut(x) + self.layers(x) * self.scale
 
 
 class ProgressiveGanDiscriminator(nn.Sequential):
-    def __init__(self, img_size: int, img_channels: int = 3, base_dim: int = 16, residual: bool = False) -> None:
+    def __init__(self, img_size: int, img_channels: int = 3, base_dim: int = 16) -> None:
         super().__init__()
         depth = int(math.log2(img_size // 4))
         self.append(nn.Conv2d(img_channels, base_dim, 1))
@@ -75,7 +69,7 @@ class ProgressiveGanDiscriminator(nn.Sequential):
 
         for _ in range(depth):
             out_ch = min(in_ch * 2, 512)
-            self.append(ProgressiveGanDiscriminatorBlock(in_ch, out_ch, residual=residual))
+            self.append(ProgressiveGanDiscriminatorBlock(in_ch, out_ch))
             in_ch = out_ch
 
         self.append(
@@ -95,7 +89,7 @@ class ProgressiveGanDiscriminator(nn.Sequential):
 
 
 class ProgressiveGanGeneratorBlock(nn.Module):
-    def __init__(self, in_dim: int, out_dim: int, residual: bool = False) -> None:
+    def __init__(self, in_dim: int, out_dim: int) -> None:
         super().__init__()
         self.layers = nn.Sequential(
             LayerNorm2d(in_dim),
@@ -105,23 +99,15 @@ class ProgressiveGanGeneratorBlock(nn.Module):
             nn.LeakyReLU(0.2, inplace=True),
             nn.Conv2d(out_dim, out_dim, 3, 1, 1),
         )
-        if residual:
-            self.shortcut = nn.Sequential(nn.Conv2d(in_dim, out_dim, 1), nn.Upsample(scale_factor=2.0))
-            self.scale = nn.Parameter(torch.full((out_dim, 1, 1), 1e-4))
-        else:
-            self.shortcut = None
+        self.shortcut = nn.Sequential(nn.Conv2d(in_dim, out_dim, 1), nn.Upsample(scale_factor=2.0))
+        self.scale = nn.Parameter(torch.full((out_dim, 1, 1), 1e-4))
 
     def forward(self, x: Tensor) -> Tensor:
-        out = self.layers(x)
-        if self.shortcut is not None:
-            out = self.shortcut(x) + out * self.scale
-        return out
+        return self.shortcut(x) + self.layers(x) * self.scale
 
 
 class ProgressiveGanGenerator(nn.Sequential):
-    def __init__(
-        self, img_size: int, img_channels: int = 3, z_dim: int = 128, base_dim: int = 16, residual: bool = False
-    ) -> None:
+    def __init__(self, img_size: int, img_channels: int = 3, z_dim: int = 128, base_dim: int = 16) -> None:
         super().__init__()
         out_ch = min(base_dim * img_size // 4, 512)
         self.append(
@@ -136,7 +122,7 @@ class ProgressiveGanGenerator(nn.Sequential):
         depth = int(math.log2(img_size // 4))
         for i in range(depth):
             out_ch = min(base_dim * img_size // 4 // 2 ** (i + 1), 512)
-            self.append(ProgressiveGanGeneratorBlock(in_ch, out_ch, residual=residual))
+            self.append(ProgressiveGanGeneratorBlock(in_ch, out_ch))
             in_ch = out_ch
 
         self.append(

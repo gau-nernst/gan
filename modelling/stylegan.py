@@ -10,6 +10,7 @@ import math
 
 import torch
 from torch import Tensor, nn
+import torch.nn.functional as F
 
 from .progressive_gan import init_weights
 
@@ -59,12 +60,7 @@ class StyleGanGeneratorBlock(nn.ModuleList):
 
 class StyleGanGenerator(nn.Module):
     def __init__(
-        self,
-        img_size: int,
-        img_channels: int = 3,
-        z_dim: int = 128,
-        base_dim: int = 16,
-        mapping_network_depth: int = 8,
+        self, img_size: int, img_channels: int = 3, z_dim: int = 128, base_dim: int = 16, mapping_network_depth: int = 8
     ) -> None:
         super().__init__()
         self.mapping_network = nn.Sequential(nn.LayerNorm(z_dim))
@@ -73,6 +69,7 @@ class StyleGanGenerator(nn.Module):
 
         self.learned_input = nn.Parameter(torch.ones(1, 512, 4, 4))
         self.blocks = nn.ModuleList()
+        self.out_convs = nn.ModuleList()
         in_ch = 512
 
         depth = int(math.log2(img_size // 4))
@@ -80,12 +77,7 @@ class StyleGanGenerator(nn.Module):
             out_ch = min(base_dim * img_size // 4 // 2 ** (i + 1), 512)
             self.blocks.append(StyleGanGeneratorBlock(in_ch, out_ch, z_dim))
             in_ch = out_ch
-
-        self.out_conv = nn.Sequential(
-            nn.InstanceNorm2d(in_ch),
-            nn.LeakyReLU(0.2, inplace=True),
-            nn.Conv2d(in_ch, img_channels, 1),
-        )
+            self.out_convs.append(nn.Conv2d(in_ch, img_channels, 1))
 
         self.reset_parameters()
 
@@ -95,6 +87,10 @@ class StyleGanGenerator(nn.Module):
     def forward(self, z: Tensor):
         w = self.mapping_network(z) * 0.01
         x = self.learned_input.expand(z.shape[0], -1, -1, -1)
-        for block in self.blocks:
+
+        x = self.blocks[0](x, w)
+        out = self.out_convs[0](x)
+        for block, out_conv in zip(self.blocks[1:], self.out_convs[1:]):
             x = block(x, w)
-        return self.out_conv(x)
+            out = F.interpolate(out, scale_factor=2.0) + out_conv(x)
+        return out
