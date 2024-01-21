@@ -1,36 +1,24 @@
-import argparse
-import inspect
-import json
 from dataclasses import dataclass, field
 from pathlib import Path
 
 import torch
 import wandb
-from torch import Tensor, nn
+from torch import nn
 from torch.utils.data import DataLoader
 from torchvision import datasets, io
 from torchvision.transforms import v2
 from tqdm import tqdm
 
 from diff_augment import DiffAugment
-from ema import EMA
 from fid import FID
 from losses import get_loss, get_regularizer
 from modelling import build_discriminator, build_generator
+from utils import EMA, apply_spectral_norm, cycle, make_parser, unnormalize
 
 
 torch.backends.cuda.matmul.allow_tf32 = True
 torch.backends.cudnn.allow_tf32 = True
 torch.backends.cudnn.benchmark = True
-
-
-def unnormalize(x: Tensor) -> Tensor:
-    return ((x * 0.5 + 0.5) * 255).round().clip(0, 255).to(torch.uint8)
-
-
-def apply_spectral_norm(m: nn.Module):
-    if isinstance(m, (nn.Linear, nn.modules.conv._ConvNd, nn.Embedding)):
-        nn.utils.parametrizations.spectral_norm(m)
 
 
 @dataclass
@@ -60,28 +48,6 @@ class TrainConfig:
     run_name: str = "dcgan_celeba"
     log_img_interval: int = 1_000
     fid_interval: int = 5_000
-
-
-def make_parser(fn):
-    parser = argparse.ArgumentParser()
-
-    for k, v in inspect.signature(fn).parameters.items():
-        if v.annotation in (str, int, float):
-            parser.add_argument(f"--{k}", type=v.annotation, default=v.default)
-        elif v.annotation is bool:
-            parser.add_argument(f"--{k}", action="store_true")
-        elif v.annotation is dict:
-            parser.add_argument(f"--{k}", type=json.loads, default=dict())
-        else:
-            raise RuntimeError(f"Unsupported type {v.annotation} for argument {k}")
-
-    return parser
-
-
-def cycle(iterator):
-    while True:
-        for x in iterator:
-            yield x
 
 
 if __name__ == "__main__":

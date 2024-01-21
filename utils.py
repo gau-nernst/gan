@@ -1,40 +1,70 @@
 import argparse
+import copy
 import inspect
-from typing import Literal, Union, get_args, get_origin
+import json
+
+import torch
+from torch import Tensor, nn
 
 
-def add_args_from_cls(parser: argparse.ArgumentParser, cls):
-    for k, v in inspect.signature(cls).parameters.items():
-        arg_type = v.annotation
+def make_parser(fn):
+    parser = argparse.ArgumentParser()
 
-        if arg_type in (int, float, str):
-            parser.add_argument(f"--{k}", type=arg_type, default=v.default)
-
-        elif arg_type is bool:
-            assert v.default is False
+    for k, v in inspect.signature(fn).parameters.items():
+        if v.annotation in (str, int, float):
+            parser.add_argument(f"--{k}", type=v.annotation, default=v.default)
+        elif v.annotation is bool:
             parser.add_argument(f"--{k}", action="store_true")
-
-        elif get_origin(arg_type) is Literal:
-            literals = get_args(arg_type)
-            assert all(isinstance(literal, str) for literal in literals)
-            parser.add_argument(f"--{k}", default=v.default, choices=literals)
-
-        # only for Optional[]
-        elif get_origin(arg_type) is Union:
-            args = get_args(arg_type)
-            assert len(args) == 2 and args[1] is type(None)
-            assert args[0] in (int, float, str)
-            parser.add_argument(f"--{k}", type=args[0], default=v.default)
-
-        elif get_origin(arg_type) is list:
-            # NOTE: the default list is shared
-            (item_type,) = get_args(arg_type)
-            parser.add_argument(f"--{k}", type=item_type, nargs="+", default=[])
-
+        elif v.annotation is dict:
+            parser.add_argument(f"--{k}", type=json.loads, default=dict())
         else:
-            raise ValueError(f"Unsupported type {arg_type}")
+            raise RuntimeError(f"Unsupported type {v.annotation} for argument {k}")
+
+    return parser
 
 
-def cls_from_args(args: argparse.Namespace, cls):
-    kwargs = {k: getattr(args, k) for k in inspect.signature(cls).parameters.keys()}
-    return cls(**kwargs)
+def normalize(x: Tensor) -> Tensor:
+    return (x / 255 - 0.5) / 0.5
+
+
+def unnormalize(x: Tensor) -> Tensor:
+    return ((x * 0.5 + 0.5) * 255).round().clip(0, 255).to(torch.uint8)
+
+
+def apply_spectral_norm(m: nn.Module):
+    if isinstance(m, (nn.Linear, nn.modules.conv._ConvNd, nn.Embedding)):
+        nn.utils.parametrizations.spectral_norm(m)
+
+
+def cycle(iterator):
+    while True:
+        for x in iterator:
+            yield x
+
+
+# reference: https://github.com/lucidrains/ema-pytorch
+class EMA(nn.Module):
+    def __init__(self, model: nn.Module, beta: float = 0.999, warmup: int = 100) -> None:
+        super().__init__()
+        self.ema_model = copy.deepcopy(model)
+        self.model = [model]
+        self.beta = beta
+        self.warmup = warmup
+        self.register_buffer("counter", torch.tensor(0, dtype=torch.long))
+
+    @torch.no_grad()
+    def step(self) -> None:
+        self.counter += 1
+        if self.counter.item() < self.warmup:
+            return
+
+        if self.counter.item() == self.warmup:
+            for p, ema_p in zip(self.model[0].parameters(), self.ema_model.parameters()):
+                ema_p.copy_(p)
+            return
+
+        for p, ema_p in zip(self.model[0].parameters(), self.ema_model.parameters()):
+            ema_p.lerp_(p, 1 - self.beta)
+
+    def forward(self, *args, **kwargs):
+        return self.ema_model(*args, **kwargs)
