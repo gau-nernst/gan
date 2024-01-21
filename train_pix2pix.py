@@ -126,10 +126,10 @@ if __name__ == "__main__":
     dloader = cycle(dloader)
 
     autocast_ctx = torch.autocast(cfg.device, dtype=torch.bfloat16, enabled=cfg.mixed_precision)
-    val_ds = Pix2PixDataset("data", cfg.dataset, "val")
+    val_ds = Pix2PixDataset("data", cfg.dataset, "test" if cfg.dataset == "night2day" else "val")
     fixed_As = []
     fixed_Bs = []
-    for i in range(100):
+    for i in range(0, len(val_ds), (len(val_ds) + 99) // 100):
         A, B = val_ds[i]
         fixed_As.append(A)
         fixed_Bs.append(B)
