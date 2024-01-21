@@ -32,18 +32,14 @@ class ColorJitter(nn.Module):
         return x
 
 
-def translate(x: Tensor, offset_x: int, offset_y: int) -> Tensor:
-    return F.pad(x, (offset_x, -offset_x, offset_y, -offset_y))
+def translate(x: Tensor, translate_x: int, translate_y: int) -> Tensor:
+    return F.pad(x, (translate_x, -translate_x, translate_y, -translate_y))
 
 
 class RandomTranslate(nn.Module):
     def forward(self, x: Tensor) -> Tensor:
         H, W = x.shape[-2:]
-        pad_h = H // 8
-        pad_w = W // 8
-        offset_y = rand_int(-pad_h, pad_h + 1)
-        offset_x = rand_int(-pad_w, pad_w + 1)
-        return translate(x, offset_x, offset_y)
+        return translate(x, rand_int(-(W // 8), W // 8 + 1), rand_int(-(H // 8), H // 8 + 1))
 
 
 class RandomCutout(nn.Module):

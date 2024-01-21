@@ -185,7 +185,7 @@ if __name__ == "__main__":
         for i in range(cfg.grad_accum):
             zs = torch.randn(reals.shape[0], 128, device=cfg.device)
             with autocast_ctx:
-                loss_g = criterion.g_loss(disc(gen(zs)), disc, cached_reals[i])
+                loss_g = criterion.g_loss(disc(gen(zs)), lambda: disc(cached_reals[i]))
             loss_g.backward()
         optim_g.step()
         optim_g.zero_grad()

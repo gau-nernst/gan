@@ -6,12 +6,13 @@ from pathlib import Path
 
 import torch
 import wandb
+import torch.nn.functional as F
 from torch import Tensor, nn
 from torch.utils.data import DataLoader, Dataset
 from torchvision import io
 from tqdm import tqdm
 
-from diff_augment import DiffAugment
+from diff_augment import rand_int, translate
 from ema import EMA
 from losses import get_loss, get_regularizer
 from modelling import build_discriminator, build_generator
@@ -62,6 +63,16 @@ class Pix2PixDataset(Dataset):
     def __getitem__(self, idx: int) -> tuple[Tensor, Tensor]:
         img = io.read_image(str(self.data_dir / self.files[idx]), mode=io.ImageReadMode.RGB)
         A, B = normalize(img).chunk(2, 2)
+        if self.split == "train":
+            if rand_int(0, 2) == 1:  # random horizontal flip
+                A = A.flip(-1)
+                B = B.flip(-1)
+            if rand_int(0, 2) == 1:  # random translate
+                H, W = A.shape[1:]
+                translate_x = rand_int(-(W // 5), W // 5 + 1)
+                translate_y = rand_int(-(H // 5), H // 5 + 1)
+                A = translate(A, translate_x, translate_y)
+                B = translate(B, translate_x, translate_y)
         return A, B
 
     def __len__(self) -> int:
@@ -89,7 +100,6 @@ class TrainConfig:
     batch_size: int = 16
     method: str = "gan"
     regularizer: str = "none"
-    diff_augment: bool = False
 
     run_name: str = "pix2pix"
     log_img_interval: int = 1_000
@@ -129,7 +139,6 @@ if __name__ == "__main__":
     gen = build_generator(cfg.model, **cfg.gen_kwargs).to(cfg.device)
     disc.apply(apply_spectral_norm) if cfg.sn_disc else None
     gen.apply(apply_spectral_norm) if cfg.sn_gen else None
-    disc = nn.Sequential(DiffAugment(), disc) if cfg.diff_augment else disc
     if cfg.channels_last:
         gen.to(memory_format=torch.channels_last)
         disc.to(memory_format=torch.channels_last)
@@ -187,8 +196,8 @@ if __name__ == "__main__":
             with autocast_ctx:
                 with torch.no_grad():
                     fakes = gen(Bs)
-                d_reals = disc(Bs, As)
-                d_fakes = disc(Bs, fakes)
+                d_reals = disc(As, Bs)
+                d_fakes = disc(fakes, Bs)
                 loss_d = criterion.d_loss(d_reals, d_fakes)
             loss_d.backward()
         optim_d.step()
@@ -198,7 +207,7 @@ if __name__ == "__main__":
         for i in range(cfg.grad_accum):
             with autocast_ctx:
                 fakes = gen(Bs)
-                loss_g = criterion.g_loss(disc(Bs, fakes), disc, None)
+                loss_g = criterion.g_loss(disc(fakes, Bs), lambda: disc(As, Bs))
                 loss_g += F.l1_loss(As, fakes) * 100  # content loss
             loss_g.backward()
         optim_g.step()
