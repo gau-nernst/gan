@@ -6,11 +6,9 @@ from pathlib import Path
 
 import torch
 import wandb
-from PIL import Image
 from torch import Tensor, nn
 from torch.utils.data import DataLoader, Dataset
 from torchvision import io
-from torchvision.transforms import v2
 from tqdm import tqdm
 
 from diff_augment import DiffAugment
@@ -22,6 +20,10 @@ from modelling import build_discriminator, build_generator
 torch.backends.cuda.matmul.allow_tf32 = True
 torch.backends.cudnn.allow_tf32 = True
 torch.backends.cudnn.benchmark = True
+
+
+def normalize(x: Tensor) -> Tensor:
+    return (x / 255 - 0.5) / 0.5
 
 
 def unnormalize(x: Tensor) -> Tensor:
@@ -42,7 +44,7 @@ def run_cmd(cmd: str):
 
 # https://efrosgans.eecs.berkeley.edu/pix2pix/datasets/
 class Pix2PixDataset(Dataset):
-    def __init__(self, root: str, dataset: str, split: str) -> None:
+    def __init__(self, root: str, dataset: str, split: str, reverse_AB: bool = False) -> None:
         super().__init__()
         assert dataset in ("cityscapes", "edges2handbags", "edges2shoes", "facades", "maps", "night2day")
         data_dir = Path(root) / dataset
@@ -55,16 +57,12 @@ class Pix2PixDataset(Dataset):
 
         self.data_dir = data_dir / dataset / split
         self.files = sorted(x.name for x in self.data_dir.iterdir())
-        self.transform = v2.Compose(
-            [
-                v2.ToImage(),
-                v2.ToDtype(torch.float32, scale=True),
-                v2.Normalize([0.5, 0.5, 0.5], [0.5, 0.5, 0.5]),
-            ]
-        )
+        self.reverse_AB = reverse_AB
 
     def __getitem__(self, idx: int) -> tuple[Tensor, Tensor]:
-        return self.transform(Image.open(self.data_dir / self.files[idx]).convert("RGB")).chunk(2, 2)
+        img = io.read_image(self.data_dir / self.files[idx], mode=io.ImageReadMode.RGB)
+        A, B = normalize(img).chunk(2, 2)
+        return (B, A) if self.reverse_AB else (A, B)
 
     def __len__(self) -> int:
         return len(self.files)
@@ -74,6 +72,7 @@ class Pix2PixDataset(Dataset):
 class TrainConfig:
     model: str = "pix2pix"
     dataset: str = "none"
+    reverse_AB: bool = False
     disc_kwargs: dict = field(default_factory=dict)
     gen_kwargs: dict = field(default_factory=dict)
     sn_disc: bool = False
@@ -150,19 +149,19 @@ if __name__ == "__main__":
     optim_d = optim_cls(disc.parameters(), cfg.lr, **cfg.optimizer_kwargs)
     optim_g = optim_cls(gen.parameters(), cfg.lr, **cfg.optimizer_kwargs)
 
-    ds = Pix2PixDataset("data", cfg.dataset, "train")
+    ds = Pix2PixDataset("data", cfg.dataset, "train", cfg.reverse_AB)
     dloader = DataLoader(
         ds, cfg.batch_size // cfg.grad_accum, shuffle=True, num_workers=4, pin_memory=True, drop_last=True
     )
     dloader = cycle(dloader)
 
     autocast_ctx = torch.autocast(cfg.device, dtype=torch.bfloat16, enabled=cfg.mixed_precision)
-    val_ds = Pix2PixDataset("data", cfg.dataset, "val")
+    val_ds = Pix2PixDataset("data", cfg.dataset, "val", cfg.reverse_AB)
     fixed_As = []
     for i in range(100):
         A, B = val_ds[i]
         fixed_As.append(A)
-    fixed_As = torch.stack(fixed_As, 0)
+    fixed_As = torch.stack(fixed_As, 0).to(cfg.device)
 
     logger = wandb.init(project="pix2pix", name=cfg.run_name, config=vars(cfg))
     log_img_dir = Path("images") / cfg.run_name
