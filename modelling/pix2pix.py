@@ -23,10 +23,10 @@ class PatchGan(nn.Sequential):
             in_ch = out_ch
 
         out_ch = base_dim * 2 ** min(depth, 3)
-        self.append(nn.Conv2d(in_ch, out_ch, 4, 1, 1))
+        self.append(nn.Conv2d(in_ch, out_ch, 3, 1, 1))  # original code uses kernel_size=4 here
         self.append(nn.InstanceNorm2d(out_ch))
         self.append(nn.LeakyReLU(0.2, inplace=True))
-        self.append(nn.Conv2d(out_ch, 1, 4, 1, 1))
+        self.append(nn.Conv2d(out_ch, 1, 3, 1, 1))
 
         self.reset_parameters()
 
