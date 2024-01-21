@@ -33,11 +33,27 @@ def apply_spectral_norm(m: nn.Module):
         nn.utils.parametrizations.spectral_norm(m)
 
 
+def run_cmd(cmd: str):
+    import shlex
+    import subprocess
+
+    subprocess.run(shlex.split(cmd), check=True)
+
+
 # https://efrosgans.eecs.berkeley.edu/pix2pix/datasets/
 class Pix2PixDataset(Dataset):
-    def __init__(self, data_dir: str):
+    def __init__(self, root: str, dataset: str, split: str) -> None:
         super().__init__()
-        self.data_dir = Path(data_dir)
+        assert dataset in ("cityscapes", "edges2handbags", "edges2shoes", "facades", "maps", "night2day")
+        data_dir = Path(root) / dataset
+
+        if not data_dir.exists():
+            data_dir.mkdir(parents=True, exist_ok=True)
+            save_path = data_dir / f"{dataset}.tar.gz"
+            run_cmd(f'wget https://efrosgans.eecs.berkeley.edu/pix2pix/datasets/{dataset}.tar.gz -O "{save_path}"')
+            run_cmd(f'tar -xzf "{save_path}" -C "{data_dir}"')
+
+        self.data_dir = data_dir / dataset / split
         self.files = sorted(x.name for x in self.data_dir.iterdir())
         self.transform = v2.Compose(
             [
@@ -57,7 +73,7 @@ class Pix2PixDataset(Dataset):
 @dataclass
 class TrainConfig:
     model: str = "pix2pix"
-    img_size: int = 256
+    dataset: str = "none"
     disc_kwargs: dict = field(default_factory=dict)
     gen_kwargs: dict = field(default_factory=dict)
     sn_disc: bool = False
@@ -72,7 +88,7 @@ class TrainConfig:
     lr: float = 2e-4
     optimizer: str = "Adam"
     optimizer_kwargs: dict = field(default_factory=dict)
-    batch_size: int = 64
+    batch_size: int = 16
     method: str = "gan"
     regularizer: str = "none"
     diff_augment: bool = False
@@ -111,8 +127,8 @@ if __name__ == "__main__":
     for k, v in vars(cfg).items():
         print(f"  {k}: {v}")
 
-    disc = build_discriminator(cfg.model, img_size=cfg.img_size, **cfg.disc_kwargs).to(cfg.device)
-    gen = build_generator(cfg.model, img_size=cfg.img_size, **cfg.gen_kwargs).to(cfg.device)
+    disc = build_discriminator(cfg.model, **cfg.disc_kwargs).to(cfg.device)
+    gen = build_generator(cfg.model, **cfg.gen_kwargs).to(cfg.device)
     disc.apply(apply_spectral_norm) if cfg.sn_disc else None
     gen.apply(apply_spectral_norm) if cfg.sn_gen else None
     disc = nn.Sequential(DiffAugment(), disc) if cfg.diff_augment else disc
@@ -134,14 +150,14 @@ if __name__ == "__main__":
     optim_d = optim_cls(disc.parameters(), cfg.lr, **cfg.optimizer_kwargs)
     optim_g = optim_cls(gen.parameters(), cfg.lr, **cfg.optimizer_kwargs)
 
-    ds = Pix2PixDataset("/Users/thien/Downloads/facades/train")
+    ds = Pix2PixDataset("data", cfg.dataset, "train")
     dloader = DataLoader(
         ds, cfg.batch_size // cfg.grad_accum, shuffle=True, num_workers=4, pin_memory=True, drop_last=True
     )
     dloader = cycle(dloader)
 
     autocast_ctx = torch.autocast(cfg.device, dtype=torch.bfloat16, enabled=cfg.mixed_precision)
-    val_ds = Pix2PixDataset("/Users/thien/Downloads/facades/val")
+    val_ds = Pix2PixDataset("data", cfg.dataset, "val")
     fixed_As = []
     for i in range(100):
         A, B = val_ds[i]

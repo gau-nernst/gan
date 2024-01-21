@@ -83,6 +83,12 @@ Progressive GAN with Hinge loss and spectral norm in Discriminator
 
 ![dcgan_celeba256_progran_resDresG_hinge](https://github.com/gau-nernst/gan/assets/26946864/a71647e7-c5e9-422f-9b0d-3bbfe402a6c9)
 
+Pix2Pix
+
+```bash
+python train_pix2pix.py --dataset cityscapes --mixed_precision --channels_last
+```
+
 Old script
 
 Train DCGAN on MNIST (28x28 padded to 32x32)
