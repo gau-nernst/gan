@@ -6,6 +6,10 @@ import torch.nn.functional as F
 from torch import Tensor, nn
 
 
+def rand_int(lo: int, hi: int) -> int:
+    return torch.randint(lo, hi, ()).item()
+
+
 def rand_brightness(x: Tensor) -> Tensor:
     return x + torch.rand(*x.shape[:-3], 1, 1, 1, dtype=x.dtype, device=x.device) - 0.5
 
@@ -28,21 +32,25 @@ class ColorJitter(nn.Module):
         return x
 
 
+def translate(x: Tensor, offset_x: int, offset_y: int) -> Tensor:
+    return F.pad(x, (offset_x, -offset_x, offset_y, -offset_y))
+
+
 class RandomTranslate(nn.Module):
     def forward(self, x: Tensor) -> Tensor:
         H, W = x.shape[-2:]
-        pad_h, pad_w = H // 8, W // 8
-        x = F.pad(x, (pad_w, pad_w, pad_h, pad_h))
-        offset_y = torch.randint(0, pad_h * 2, ()).item()
-        offset_x = torch.randint(0, pad_w * 2, ()).item()
-        return x[..., offset_y : offset_y + H, offset_x : offset_x + W]
+        pad_h = H // 8
+        pad_w = W // 8
+        offset_y = rand_int(-pad_h, pad_h + 1)
+        offset_x = rand_int(-pad_w, pad_w + 1)
+        return translate(x, offset_x, offset_y)
 
 
 class RandomCutout(nn.Module):
     def forward(self, x: Tensor) -> Tensor:
         H, W = x.shape[-2:]
-        offset_y = torch.randint(0, H // 2, ()).item()
-        offset_x = torch.randint(0, W // 2, ()).item()
+        offset_y = rand_int(0, H // 2)
+        offset_x = rand_int(0, W // 2)
         x[..., offset_y : offset_y + H // 2, offset_x : offset_x + H // 2] = 0
         return x
 
