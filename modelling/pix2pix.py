@@ -9,7 +9,7 @@ from torch import Tensor, nn
 
 
 class PatchGan(nn.Sequential):
-    def __init__(self, A_channels: int = 3, B_channels: int = 3, base_dim: int = 64, depth: int = 3):
+    def __init__(self, A_channels: int = 3, B_channels: int = 3, base_dim: int = 64, depth: int = 3) -> None:
         super().__init__()
         self.append(nn.Conv2d(A_channels + B_channels, base_dim, 4, 2, 1))
         self.append(nn.LeakyReLU(0.2, inplace=True))
@@ -33,8 +33,8 @@ class PatchGan(nn.Sequential):
     def reset_parameters(self):
         self.apply(init_weights)
 
-    def forward(self, imgs_A: Tensor, imgs_B: Tensor):
-        return super().forward(torch.cat([imgs_A, imgs_B], dim=1))
+    def forward(self, As: Tensor, Bs: Tensor):
+        return super().forward(torch.cat([As, Bs], dim=1))
 
 
 class UnetGenerator(nn.Module):

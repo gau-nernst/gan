@@ -44,7 +44,7 @@ def run_cmd(cmd: str):
 
 # https://efrosgans.eecs.berkeley.edu/pix2pix/datasets/
 class Pix2PixDataset(Dataset):
-    def __init__(self, root: str, dataset: str, split: str, reverse_AB: bool = False) -> None:
+    def __init__(self, root: str, dataset: str, split: str) -> None:
         super().__init__()
         assert dataset in ("cityscapes", "edges2handbags", "edges2shoes", "facades", "maps", "night2day")
         data_dir = Path(root) / dataset
@@ -57,12 +57,12 @@ class Pix2PixDataset(Dataset):
 
         self.data_dir = data_dir / dataset / split
         self.files = sorted(x.name for x in self.data_dir.iterdir())
-        self.reverse_AB = reverse_AB
+        self.split = split
 
     def __getitem__(self, idx: int) -> tuple[Tensor, Tensor]:
-        img = io.read_image(self.data_dir / self.files[idx], mode=io.ImageReadMode.RGB)
+        img = io.read_image(str(self.data_dir / self.files[idx]), mode=io.ImageReadMode.RGB)
         A, B = normalize(img).chunk(2, 2)
-        return (B, A) if self.reverse_AB else (A, B)
+        return A, B
 
     def __len__(self) -> int:
         return len(self.files)
@@ -72,7 +72,6 @@ class Pix2PixDataset(Dataset):
 class TrainConfig:
     model: str = "pix2pix"
     dataset: str = "none"
-    reverse_AB: bool = False
     disc_kwargs: dict = field(default_factory=dict)
     gen_kwargs: dict = field(default_factory=dict)
     sn_disc: bool = False
@@ -149,23 +148,29 @@ if __name__ == "__main__":
     optim_d = optim_cls(disc.parameters(), cfg.lr, **cfg.optimizer_kwargs)
     optim_g = optim_cls(gen.parameters(), cfg.lr, **cfg.optimizer_kwargs)
 
-    ds = Pix2PixDataset("data", cfg.dataset, "train", cfg.reverse_AB)
+    ds = Pix2PixDataset("data", cfg.dataset, "train")
     dloader = DataLoader(
         ds, cfg.batch_size // cfg.grad_accum, shuffle=True, num_workers=4, pin_memory=True, drop_last=True
     )
     dloader = cycle(dloader)
 
     autocast_ctx = torch.autocast(cfg.device, dtype=torch.bfloat16, enabled=cfg.mixed_precision)
-    val_ds = Pix2PixDataset("data", cfg.dataset, "val", cfg.reverse_AB)
+    val_ds = Pix2PixDataset("data", cfg.dataset, "val")
     fixed_As = []
+    fixed_Bs = []
     for i in range(100):
         A, B = val_ds[i]
         fixed_As.append(A)
-    fixed_As = torch.stack(fixed_As, 0).to(cfg.device)
+        fixed_Bs.append(B)
+    fixed_As = torch.stack(fixed_As, 0)
+    fixed_Bs = torch.stack(fixed_Bs, 0).to(cfg.device)
 
     logger = wandb.init(project="pix2pix", name=cfg.run_name, config=vars(cfg))
     log_img_dir = Path("images") / cfg.run_name
     log_img_dir.mkdir(parents=True, exist_ok=True)
+
+    reals = fixed_As.unflatten(0, (10, 10)).permute(2, 0, 3, 1, 4).flatten(1, 2).flatten(-2, -1)
+    io.write_png(unnormalize(reals), f"{log_img_dir}/reals.png")
 
     step = 0  # generator update step
     pbar = tqdm(total=cfg.n_iters, dynamic_ncols=True)
@@ -181,9 +186,9 @@ if __name__ == "__main__":
 
             with autocast_ctx:
                 with torch.no_grad():
-                    fakes = gen(As)
-                d_reals = disc(As, Bs)
-                d_fakes = disc(As, fakes)
+                    fakes = gen(Bs)
+                d_reals = disc(Bs, As)
+                d_fakes = disc(Bs, fakes)
                 loss_d = criterion.d_loss(d_reals, d_fakes)
             loss_d.backward()
         optim_d.step()
@@ -192,7 +197,9 @@ if __name__ == "__main__":
         disc.requires_grad_(False)
         for i in range(cfg.grad_accum):
             with autocast_ctx:
-                loss_g = criterion.g_loss(disc(As, gen(As)), disc, None)
+                fakes = gen(Bs)
+                loss_g = criterion.g_loss(disc(Bs, fakes), disc, None)
+                loss_g += F.l1_loss(As, fakes) * 100  # content loss
             loss_g.backward()
         optim_g.step()
         optim_g.zero_grad()
@@ -213,7 +220,7 @@ if __name__ == "__main__":
         if step % cfg.log_img_interval == 0:
             for suffix, model in [("", gen), ("_ema", gen_ema)]:
                 with autocast_ctx, torch.no_grad():
-                    fakes = model(fixed_As)
+                    fakes = model(fixed_Bs)
                 fakes = fakes.cpu().unflatten(0, (10, 10)).permute(2, 0, 3, 1, 4).flatten(1, 2).flatten(-2, -1)
                 fakes = unnormalize(fakes)
                 io.write_png(fakes, f"{log_img_dir}/step{step // 1000:04d}k{suffix}.png")
