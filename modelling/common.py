@@ -1,6 +1,14 @@
 from functools import partial
 
-from torch import nn
+from torch import Tensor, nn
+
+
+class LayerNorm2d(nn.LayerNorm):
+    def forward(self, x: Tensor) -> Tensor:
+        out = x.flatten(-2).transpose(-1, -2)
+        out = super().forward(out)
+        out = out.transpose(-1, -2).unflatten(-1, x.shape[-2:])
+        return out
 
 
 def get_norm(norm: str, dim: int):
@@ -8,6 +16,7 @@ def get_norm(norm: str, dim: int):
         none=nn.Identity,
         batch=partial(nn.BatchNorm2d, track_running_stats=False),
         instance=partial(nn.InstanceNorm2d, affine=True),
+        layer=LayerNorm2d,
     )[norm](dim)
 
 
