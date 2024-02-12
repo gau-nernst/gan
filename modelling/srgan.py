@@ -6,28 +6,24 @@
 
 from torch import Tensor, nn
 
-from .cyclegan import ResNetBlock
+from .common import conv_norm_act
+from .cyclegan import CycleGanResBlock
 
 
 class SRResNet(nn.Module):
-    def __init__(self, img_channels: int = 3, base_channels: int = 64, n_blocks: int = 16, upsample: int = 2):
+    def __init__(self, base_dim: int = 64, n_blocks: int = 16, n_upsample: int = 2) -> None:
         super().__init__()
-        self.input_layer = nn.Sequential(nn.Conv2d(img_channels, base_channels, 9, 1, 4), nn.PReLU())
+        self.input_layer = conv_norm_act(3, base_dim, 9, act="prelu")
 
         self.blocks = nn.Sequential()
         for _ in range(n_blocks):
-            self.blocks.append(ResNetBlock(base_channels))
-        self.blocks.append(
-            nn.Sequential(
-                nn.Conv2d(base_channels, base_channels, 3, 1, 1, bias=False),
-                nn.BatchNorm2d(base_channels),
-            )
-        )
+            self.blocks.append(CycleGanResBlock(base_dim))
+        self.blocks.append(conv_norm_act(base_dim, base_dim, 3, norm="batch"))
 
         self.output_layer = nn.Sequential()
-        for _ in range(upsample):
-            self.output_layer.extend([nn.ConvTranspose2d(base_channels, base_channels, 6, 2, 2), nn.PReLU()])
-        self.output_layer.append(nn.Conv2d(base_channels, img_channels, 9, 1, 4))
+        for _ in range(n_upsample):
+            self.output_layer.append(conv_norm_act(base_dim, base_dim, 6, 2, transpose=True, act="prelu"))
+        self.output_layer.append(nn.Conv2d(base_dim, 3, 9, 1, 4))
 
     def forward(self, x: Tensor) -> Tensor:
         out = self.input_layer(x)
@@ -37,21 +33,16 @@ class SRResNet(nn.Module):
 
 
 class SRGANDiscriminator(nn.Sequential):
-    def __init__(self, img_channels: int = 3, base_dim: int = 64):
+    def __init__(self, base_dim: int = 64):
         super().__init__()
 
-        def get_nc(idx: int):
+        def get_nc(idx: int) -> int:
             return base_dim * 2 ** (idx // 2)
 
-        self.extend([nn.Conv2d(img_channels, base_dim, 3, 1, 1), nn.LeakyReLU(0.2, inplace=True)])
+        self.append(conv_norm_act(3, base_dim, 3, act="leaky_relu"))
 
         for i in range(1, 8):
-            self.append(
-                nn.Sequential(
-                    nn.Conv2d(get_nc(i - 1), get_nc(i), 3, i % 2 + 1, 1),
-                    nn.BatchNorm2d(get_nc(i)),
-                    nn.LeakyReLU(0.2, inplace=True),
-                )
-            )
+            self.append(conv_norm_act(get_nc(i - 1), get_nc(i), 3, i % 2 + 1, norm="batch", act="leaky_relu"))
 
-        self.extend([nn.Conv2d(get_nc(7), get_nc(8), 1), nn.LeakyReLU(0.2, inplace=True), nn.Conv2d(get_nc(8), 1, 1)])
+        self.append(conv_norm_act(get_nc(7), get_nc(8), 1, act="leaky_relu"))
+        self.append(nn.Conv2d(get_nc(8), 1, 1))
