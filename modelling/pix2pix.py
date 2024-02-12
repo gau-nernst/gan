@@ -7,25 +7,24 @@
 import torch
 from torch import Tensor, nn
 
+from .common import conv_norm_act
 
+
+# NOTE: original code uses affine=False for InstanceNorm2d
 class PatchGan(nn.Sequential):
     def __init__(self, A_channels: int = 3, B_channels: int = 3, base_dim: int = 64, depth: int = 3) -> None:
         super().__init__()
-        self.append(nn.Conv2d(A_channels + B_channels, base_dim, 4, 2, 1))
-        self.append(nn.LeakyReLU(0.2, inplace=True))
+        self.append(conv_norm_act(A_channels + B_channels, base_dim, 4, 2, act="leaky_relu"))
         in_ch = base_dim
 
         for i in range(1, depth):
             out_ch = base_dim * 2 ** min(i, 3)
-            self.append(nn.Conv2d(in_ch, out_ch, 4, 2, 1))
-            self.append(nn.InstanceNorm2d(out_ch))
-            self.append(nn.LeakyReLU(0.2, inplace=True))
+            self.append(conv_norm_act(in_ch, out_ch, 4, 2, norm="instance", act="leaky_relu"))
             in_ch = out_ch
 
+        # original code uses kernel_size=4 here
         out_ch = base_dim * 2 ** min(depth, 3)
-        self.append(nn.Conv2d(in_ch, out_ch, 3, 1, 1))  # original code uses kernel_size=4 here
-        self.append(nn.InstanceNorm2d(out_ch))
-        self.append(nn.LeakyReLU(0.2, inplace=True))
+        self.append(conv_norm_act(in_ch, out_ch, 3, norm="instance", act="leaky_relu"))
         self.append(nn.Conv2d(out_ch, 1, 3, 1, 1))
 
         self.reset_parameters()
