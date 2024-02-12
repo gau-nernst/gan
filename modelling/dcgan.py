@@ -10,7 +10,7 @@ import math
 
 from torch import nn
 
-from .utils import get_norm
+from .common import get_norm
 
 
 class DcGanDiscriminator(nn.Sequential):
