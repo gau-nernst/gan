@@ -25,6 +25,7 @@ def get_act(act: str):
         none=nn.Identity,
         relu=nn.ReLU,
         leaky_relu=partial(nn.LeakyReLU, negative_slope=0.2),
+        prelu=nn.PReLU,
         tanh=nn.Tanh,
     )[act]()
 
