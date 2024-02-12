@@ -6,6 +6,7 @@ from .pix2pix import PatchGan, UnetGenerator
 from .progressive_gan import ProgressiveGanDiscriminator, ProgressiveGanGenerator
 from .sagan import SaGanDiscriminator, SaGanGenerator
 from .srgan import SRGANDiscriminator, SRResNet
+from .stargan import StarGanDiscriminator, StarGanGenerator
 from .stylegan import StyleGanGenerator
 from .stylegan2 import StyleGan2Generator
 
@@ -22,6 +23,7 @@ def build_generator(name: str, *args, **kwargs):
         cyclegan=ResNetGenerator,
         srgan=SRResNet,
         esrgan=ESRGANGenerator,
+        stargan=StarGanGenerator,
     )[name](*args, **kwargs)
 
 
@@ -36,4 +38,5 @@ def build_discriminator(name: str, *args, **kwargs):
         pix2pix=PatchGan,
         cyclegan=PatchGan,
         srgan=SRGANDiscriminator,
+        stargan=StarGanDiscriminator,
     )[name](*args, **kwargs)
