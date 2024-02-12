@@ -41,7 +41,7 @@ def conv_norm_act(
 ) -> nn.Sequential:
     conv_cls = nn.ConvTranspose2d if transpose else nn.Conv2d
     return nn.Sequential(
-        conv_cls(in_dim, out_dim, kernel_size, stride, (kernel_size - 1) // 2, bias=norm in ("none",)),
+        conv_cls(in_dim, out_dim, kernel_size, stride, (kernel_size - 1) // 2, bias=norm in ("none", "layer")),
         get_norm(norm, out_dim),
         get_act(act),
     )
