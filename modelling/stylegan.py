@@ -12,6 +12,7 @@ import torch
 import torch.nn.functional as F
 from torch import Tensor, nn
 
+from .common import AdaIN
 from .progressive_gan import init_weights
 
 
@@ -24,18 +25,6 @@ class Noise(nn.Module):
         N, _, H, W = x.shape
         noise = torch.randn(N, 1, H, W, device=x.device, dtype=x.dtype)
         return x + noise * self.scale
-
-
-class AdaIN(nn.InstanceNorm2d):
-    def __init__(self, dim: int, z_dim: int) -> None:
-        super().__init__(dim)
-        self.style_w = nn.Linear(z_dim, dim)
-        self.style_b = nn.Linear(z_dim, dim)
-
-    def forward(self, x: Tensor, w: Tensor) -> Tensor:
-        weight = self.style_w(w).unflatten(-1, (-1, 1, 1)) + 1
-        bias = self.style_b(w).unflatten(-1, (-1, 1, 1))
-        return super().forward(x) * weight + bias
 
 
 class StyleGanGeneratorBlock(nn.ModuleList):

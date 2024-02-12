@@ -3,6 +3,18 @@ from functools import partial
 from torch import Tensor, nn
 
 
+class AdaIN(nn.InstanceNorm2d):
+    def __init__(self, dim: int, z_dim: int) -> None:
+        super().__init__(dim)
+        self.style_w = nn.Linear(z_dim, dim)
+        self.style_b = nn.Linear(z_dim, dim)
+
+    def forward(self, x: Tensor, w: Tensor) -> Tensor:
+        weight = self.style_w(w).unflatten(-1, (-1, 1, 1)) + 1
+        bias = self.style_b(w).unflatten(-1, (-1, 1, 1))
+        return super().forward(x) * weight + bias
+
+
 class LayerNorm2d(nn.LayerNorm):
     def forward(self, x: Tensor) -> Tensor:
         out = x.flatten(-2).transpose(-1, -2)
