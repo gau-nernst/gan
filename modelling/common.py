@@ -57,3 +57,20 @@ def conv_norm_act(
         get_norm(norm, out_dim),
         get_act(act),
     )
+
+
+def norm_act_conv(
+    in_dim: int,
+    out_dim: int,
+    kernel_size: int,
+    stride: int = 1,
+    transpose: bool = False,
+    norm: str = "none",
+    act: str = "none",
+) -> nn.Sequential:
+    conv_cls = nn.ConvTranspose2d if transpose else nn.Conv2d
+    return nn.Sequential(
+        get_norm(norm, in_dim),
+        get_act(act),
+        conv_cls(in_dim, out_dim, kernel_size, stride, (kernel_size - 1) // 2),
+    )
