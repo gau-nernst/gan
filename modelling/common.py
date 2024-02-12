@@ -13,8 +13,10 @@ def get_norm(norm: str, dim: int):
 
 def get_act(act: str):
     return dict(
+        none=nn.Identity,
         relu=nn.ReLU,
         leaky_relu=partial(nn.LeakyReLU, negative_slope=0.2),
+        tanh=nn.Tanh,
     )[act]()
 
 

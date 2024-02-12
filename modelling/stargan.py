@@ -3,48 +3,34 @@
 
 from torch import Tensor, nn
 
-
-def _conv_norm_act(in_dim: int, out_dim: int, kernel_size: int, stride: int = 1) -> nn.Sequential:
-    return nn.Sequential(
-        nn.Conv2d(in_dim, out_dim, kernel_size, stride, (kernel_size - 1) // 2, bias=False),
-        nn.InstanceNorm2d(out_dim, affine=True, track_running_stats=True),
-        nn.ReLU(),
-    )
+from .common import conv_norm_act
 
 
 class StarGanResBlock(nn.Sequential):
     def __init__(self, in_dim: int, out_dim: int) -> None:
         super().__init__(
-            *_conv_norm_act(in_dim, out_dim, 3),
-            nn.Conv2d(out_dim, out_dim, 3, 1, 1, bias=False),
-            nn.InstanceNorm2d(out_dim, affine=True, track_running_stats=True),
+            *conv_norm_act(in_dim, out_dim, 3, norm="instance", act="relu"),
+            *conv_norm_act(out_dim, out_dim, 3, norm="instance"),
         )
 
     def forward(self, x: Tensor) -> Tensor:
         return x + super().forward(x)
 
 
-def _upsample(in_dim: int, out_dim: int):
-    return nn.Sequential(
-        nn.ConvTranspose2d(in_dim, out_dim, 4, 2, 1, bias=False),
-        nn.InstanceNorm2d(out_dim, affine=True, track_running_stats=True),
-        nn.ReLU(),
-    )
-
-
 class StarGanGenerator(nn.Sequential):
     def __init__(self, n_classes: int = 0, n_res_layers: int = 6) -> None:
         super().__init__(
-            _conv_norm_act(3 + n_classes, 64, 7),
-            _conv_norm_act(64, 128, 4, 2),
-            _conv_norm_act(128, 256, 4, 2),
+            conv_norm_act(3 + n_classes, 64, 7, norm="instance", act="relu"),
+            conv_norm_act(64, 128, 4, 2, norm="instance", act="relu"),
+            conv_norm_act(128, 256, 4, 2, norm="instance", act="relu"),
             *[StarGanResBlock(256, 256) for _ in range(n_res_layers)],
-            _upsample(256, 128),
-            _upsample(128, 64),
-            nn.Sequential(nn.Conv2d(64, 3, 7, 1, 3), nn.Tanh()),
+            conv_norm_act(256, 128, 4, 2, transpose=True, norm="instance", act="relu"),
+            conv_norm_act(128, 64, 4, 2, transpose=True, norm="instance", act="relu"),
+            conv_norm_act(64, 3, 7, act="tanh"),  # no norm
         )
 
 
+# NOTE: original paper uses negative_slop=0.01 (PyTorch's default) for LeakyReLU
 class StarGanDiscriminator(nn.Module):
     def __init__(self, img_size: int, n_classes: int, n_layers: int = 6) -> None:
         super().__init__()
@@ -52,7 +38,7 @@ class StarGanDiscriminator(nn.Module):
         in_dim = 3
         out_dim = 64
         for _ in range(n_layers):
-            self.backbone.extend([nn.Conv2d(in_dim, out_dim, 4, 2, 1), nn.LeakyReLU()])
+            self.backbone.append(conv_norm_act(in_dim, out_dim, 4, 2, act="leaky_relu"))  # no norm
             in_dim = out_dim
             out_dim *= 2
 
