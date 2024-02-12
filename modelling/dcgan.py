@@ -15,7 +15,6 @@ from .common import conv_norm_act, get_norm
 
 class DcGanDiscriminator(nn.Sequential):
     def __init__(self, img_size: int = 64, base_dim: int = 64, norm: str = "batch") -> None:
-        # no bn in the first conv layer
         super().__init__()
         self.append(conv_norm_act(3, base_dim, 4, 2, act="leaky_relu"))  # no norm
         in_ch = base_dim
