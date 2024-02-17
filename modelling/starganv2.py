@@ -90,30 +90,52 @@ class StarGanv2Generator(nn.Module):
         return out
 
 
-class StarGanv2Discriminator(nn.Module):
-    def __init__(self, img_size: int = 256, n_domains: int = 2, base_dim: int = 64):
+# Projection Discriminator
+class StarGanv2Discriminator(nn.Sequential):
+    def __init__(self, img_size: int = 256, n_domains: int = 2, base_dim: int = 64, output_dim: int = 1) -> None:
         super().__init__()
-        self.backbone = nn.Sequential()
-        self.backbone.append(nn.Conv2d(3, base_dim, 3, 1, 1))
+        self.append(nn.Conv2d(3, base_dim, 3, 1, 1))
         in_dim = base_dim
 
         n_layers = int(math.log2(img_size)) - 2
         for i in range(n_layers):
             out_dim = max(base_dim * 2 ** (i + 1), 512)
-            self.backbone.append(StarGanv2EncoderBlock(in_dim, out_dim, downsample=True)),
+            self.append(StarGanv2EncoderBlock(in_dim, out_dim, downsample=True)),
             in_dim = out_dim
 
-        self.backbone.append(
+        self.append(
             nn.Sequential(
                 nn.Flatten(),
                 nn.LeakyReLU(0.2),
                 nn.Linear(in_dim * 4 * 4, in_dim),
                 nn.LeakyReLU(0.2),
+                nn.Linear(in_dim, n_domains * output_dim),
             )
         )
 
-        self.classifier_weight = nn.Parameter(torch.zeros(n_domains, in_dim))
-        self.classifier_bias = nn.Parameter(torch.zeros(n_domains))
+        self.n_domains = n_domains
 
     def forward(self, x: Tensor, domain: Tensor) -> Tensor:
-        return (self.backbone(x) * self.classifier_weight[domain]).sum(-1) + self.classifier_bias[domain]
+        out = super().forward(x).unflatten(-1, (self.n_domains, -1))
+        return out[torch.arange(x.shape[0], device=x.device), domain]
+
+
+class MappingNetwork(nn.Module):
+    def __init__(self, z_dim: int = 16, hidden_dim: int = 512, style_dim: int = 64, n_domains: int = 2) -> None:
+        super().__init__()
+        self.shared = nn.Sequential(nn.Linear(z_dim, hidden_dim), nn.ReLU())
+        for _ in range(3):
+            self.shared.extend([nn.Linear(hidden_dim, hidden_dim), nn.ReLU()])
+
+        self.unshared = nn.ModuleList()
+        for _ in range(n_domains):
+            branch = nn.Sequential()
+            for _ in range(3):
+                branch.extend([nn.Linear(hidden_dim, hidden_dim), nn.ReLU()])
+            branch.append(nn.Linear(hidden_dim, style_dim))
+            self.unshared.append(branch)
+
+    def forward(self, x: Tensor, domain: Tensor) -> Tensor:
+        shared = self.shared(x)
+        out = torch.stack([branch(shared) for branch in self.unshared], dim=1)
+        return out[torch.arange(x.shape[0], device=x.device), domain]
