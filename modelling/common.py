@@ -1,9 +1,10 @@
 from functools import partial
 
+import torch.nn.functional as F
 from torch import Tensor, nn
 
 
-class AdaIN(nn.InstanceNorm2d):
+class AdaIN(nn.Module):
     def __init__(self, dim: int, z_dim: int) -> None:
         super().__init__(dim)
         self.style_w = nn.Linear(z_dim, dim)
@@ -12,7 +13,7 @@ class AdaIN(nn.InstanceNorm2d):
     def forward(self, x: Tensor, w: Tensor) -> Tensor:
         weight = self.style_w(w).unflatten(-1, (-1, 1, 1)) + 1
         bias = self.style_b(w).unflatten(-1, (-1, 1, 1))
-        return super().forward(x) * weight + bias
+        return F.instance_norm(x) * weight + bias
 
 
 class LayerNorm2d(nn.LayerNorm):
