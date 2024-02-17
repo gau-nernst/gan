@@ -4,6 +4,7 @@
 
 import math
 
+import torch
 from torch import Tensor, nn
 
 from .common import AdaIN, norm_act_conv
@@ -87,3 +88,32 @@ class StarGanv2Generator(nn.Module):
             out = layer(out, style)
         out = self.out_conv(out)
         return out
+
+
+class StarGanv2Discriminator(nn.Module):
+    def __init__(self, img_size: int = 256, n_domains: int = 2, base_dim: int = 64):
+        super().__init__()
+        self.backbone = nn.Sequential()
+        self.backbone.append(nn.Conv2d(3, base_dim, 3, 1, 1))
+        in_dim = base_dim
+
+        n_layers = int(math.log2(img_size)) - 2
+        for i in range(n_layers):
+            out_dim = max(base_dim * 2 ** (i + 1), 512)
+            self.backbone.append(StarGanv2EncoderBlock(in_dim, out_dim, downsample=True)),
+            in_dim = out_dim
+
+        self.backbone.append(
+            nn.Sequential(
+                nn.Flatten(),
+                nn.LeakyReLU(0.2),
+                nn.Linear(in_dim * 4 * 4, in_dim),
+                nn.LeakyReLU(0.2),
+            )
+        )
+
+        self.classifier_weight = nn.Parameter(torch.zeros(n_domains, in_dim))
+        self.classifier_bias = nn.Parameter(torch.zeros(n_domains))
+
+    def forward(self, x: Tensor, domain: Tensor) -> Tensor:
+        return (self.backbone(x) * self.classifier_weight[domain]).sum(-1) + self.classifier_bias[domain]
