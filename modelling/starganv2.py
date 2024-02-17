@@ -1,5 +1,6 @@
 # https://arxiv.org/abs/1912.01865
 # https://github.com/clovaai/stargan-v2
+# NOTE: mask and HPF are not implemneted. See https://github.com/clovaai/stargan-v2/issues/70
 
 import math
 
@@ -8,13 +9,13 @@ from torch import Tensor, nn
 from .common import AdaIN, norm_act_conv
 
 
-class StarGanv2ResBlock(nn.Module):
+class StarGanv2EncoderBlock(nn.Module):
     def __init__(self, in_dim: int, out_dim: int, norm: str = "none", downsample: bool = False) -> None:
         super().__init__()
         self.residual = nn.Sequential(
-            norm_act_conv(in_dim, in_dim, 3, norm=norm, act="leaky_relu"),
+            *norm_act_conv(in_dim, in_dim, 3, norm=norm, act="leaky_relu"),
             nn.AvgPool2d(2) if downsample else nn.Identity(),
-            norm_act_conv(in_dim, out_dim, 3, norm=norm, act="leaky_relu"),
+            *norm_act_conv(in_dim, out_dim, 3, norm=norm, act="leaky_relu"),
         )
         self.shortcut = nn.Sequential(
             nn.AvgPool2d(2) if downsample else nn.Identity(),
@@ -25,7 +26,7 @@ class StarGanv2ResBlock(nn.Module):
         return self.shortcut(x) + self.residual(x)
 
 
-class StarGanv2UpsampleResBlock(nn.Module):
+class StarGanv2DecoderBlock(nn.Module):
     def __init__(self, in_dim: int, out_dim: int, style_dim: int = 64, upsample: bool = False) -> None:
         super().__init__()
         self.residual = nn.ModuleList(
@@ -51,21 +52,38 @@ class StarGanv2UpsampleResBlock(nn.Module):
         return self.shortcut(x) + res
 
 
-class StarGanv2Generator(nn.Sequential):
-    def __init__(self, img_size: int = 256, style_dim: int = 64) -> None:
-        self.in_conv = nn.Conv2d(3, 64, 3, 1, 1)
-        in_dim = 64
-
-        self.encoder = nn.Sequential()
+class StarGanv2Generator(nn.Module):
+    def __init__(self, img_size: int = 256, style_dim: int = 64, base_dim: int = 64) -> None:
+        super().__init__()
+        self.in_conv = nn.Conv2d(3, base_dim, 3, 1, 1)
+        in_dim = base_dim
 
         n_layers = int(math.log2(img_size)) - 4
-        for _ in range(n_layers):
-            out_dim = min(in_dim * 2, 512)
-            self.encoder.append(StarGanv2ResBlock(in_dim, out_dim, norm="instance", downsample=True))
+        self.encoder = nn.Sequential()
+        self.decoder = nn.ModuleList()
+
+        for i in range(n_layers):
+            out_dim = min(base_dim * 2 ** (i + 1), 512)
+            self.encoder.append(StarGanv2EncoderBlock(in_dim, out_dim, norm="instance", downsample=True))
             in_dim = out_dim
-        self.encoder.append(StarGanv2ResBlock(in_dim, in_dim, norm="instance"))
 
-        self.decoder = nn.Sequential()
-        self.decoder.append(StarGanv2UpsampleResBlock)
+        self.encoder.append(StarGanv2EncoderBlock(in_dim, in_dim, norm="instance"))
+        self.encoder.append(StarGanv2EncoderBlock(in_dim, in_dim, norm="instance"))
+        self.decoder.append(StarGanv2DecoderBlock(in_dim, in_dim, style_dim))
+        self.decoder.append(StarGanv2DecoderBlock(in_dim, in_dim, style_dim))
 
-        self.out_conv = norm_act_conv(64, 3, 1, norm="instance", act="leaky_relu")
+        for i in range(n_layers - 1, -1, -1):
+            out_dim = min(base_dim * 2**i, 512)
+            self.decoder.append(StarGanv2DecoderBlock(in_dim, out_dim, style_dim, upsample=True))
+            in_dim = out_dim
+
+        assert in_dim == base_dim
+        self.out_conv = norm_act_conv(base_dim, 3, 1, norm="instance", act="leaky_relu")
+
+    def forward(self, x: Tensor, style: Tensor) -> Tensor:
+        out = self.in_conv(x)
+        out = self.encoder(out)
+        for layer in self.decoder:
+            out = layer(out, style)
+        out = self.out_conv(out)
+        return out

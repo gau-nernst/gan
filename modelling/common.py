@@ -6,7 +6,7 @@ from torch import Tensor, nn
 
 class AdaIN(nn.Module):
     def __init__(self, dim: int, z_dim: int) -> None:
-        super().__init__(dim)
+        super().__init__()
         self.style_w = nn.Linear(z_dim, dim)
         self.style_b = nn.Linear(z_dim, dim)
 
