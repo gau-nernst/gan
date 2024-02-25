@@ -1,3 +1,5 @@
+from typing import Callable
+
 import torch
 import torch.nn.functional as F
 from torch import Tensor, nn
@@ -28,7 +30,7 @@ class GanLoss:
         return -F.logsigmoid(d_reals).mean() - F.logsigmoid(-d_fakes).mean()
 
     @staticmethod
-    def g_loss(d_fakes: Tensor, disc: nn.Module, reals: Tensor) -> Tensor:
+    def g_loss(d_fakes: Tensor, d_reals_fn: Callable[[], Tensor]) -> Tensor:
         return -F.logsigmoid(d_fakes).mean()
 
 
@@ -39,7 +41,7 @@ class LsGanLoss:
         return (d_reals - 1).square().mean() + d_fakes.square().mean()
 
     @staticmethod
-    def g_loss(d_fakes: Tensor, disc: nn.Module, reals: Tensor) -> Tensor:
+    def g_loss(d_fakes: Tensor, d_reals_fn: Callable[[], Tensor]) -> Tensor:
         return (d_fakes - 1).square().mean()
 
 
@@ -51,7 +53,7 @@ class WganLoss:
         return -d_reals.mean() + d_fakes.mean()
 
     @staticmethod
-    def g_loss(d_fakes: Tensor, disc: nn.Module, reals: Tensor) -> Tensor:
+    def g_loss(d_fakes: Tensor, d_reals_fn: Callable[[], Tensor]) -> Tensor:
         return -d_fakes.mean()
 
 
@@ -75,9 +77,9 @@ class RelativisticGanLoss:
         return -F.logsigmoid(d_reals - d_fakes).mean()
 
     @staticmethod
-    def g_loss(d_fakes: Tensor, disc: nn.Module, reals: Tensor) -> Tensor:
+    def g_loss(d_fakes: Tensor, d_reals_fn: Callable[[], Tensor]) -> Tensor:
         with torch.no_grad():
-            d_reals = disc(reals)
+            d_reals = d_reals_fn()
         return -F.logsigmoid(d_fakes - d_reals).mean()
 
 

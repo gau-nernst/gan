@@ -3,103 +3,100 @@
 # Code reference:
 # https://github.com/junyanz/pytorch-CycleGAN-and-pix2pix
 
-from functools import partial
 
 import torch
 from torch import Tensor, nn
 
-from .base import _Act, _Norm, conv_norm_act, leaky_relu, relu
-from .dcgan import init_weights
+from .common import conv_norm_act
 
 
-class PatchGAN(nn.Module):
-    def __init__(
-        self,
-        A_channels: int = 3,
-        B_channels: int = 3,
-        base_channels: int = 64,
-        n_layers: int = 3,
-        norm: _Norm = nn.InstanceNorm2d,
-        act: _Act = leaky_relu,
-    ):
+# NOTE: original code uses affine=False for InstanceNorm2d
+class PatchGan(nn.Sequential):
+    def __init__(self, A_channels: int = 3, B_channels: int = 3, base_dim: int = 64, depth: int = 3) -> None:
         super().__init__()
-        self.layers = nn.Sequential()
-        conv4x4 = partial(nn.Conv2d, kernel_size=4, padding=1)
-        in_channels = A_channels + B_channels
+        self.append(conv_norm_act(A_channels + B_channels, base_dim, 4, 2, act="leaky_relu"))
+        in_ch = base_dim
 
-        def get_out_c(idx: int):
-            return base_channels * 2 ** min(idx, 3)
+        for i in range(1, depth):
+            out_ch = base_dim * 2 ** min(i, 3)
+            self.append(conv_norm_act(in_ch, out_ch, 4, 2, norm="instance", act="leaky_relu"))
+            in_ch = out_ch
 
-        self.layers.append(nn.Sequential(conv4x4(in_channels, base_channels, stride=2), act()))
-
-        for i in range(1, n_layers):
-            self.layers.append(conv_norm_act(get_out_c(i - 1), get_out_c(i), conv4x4, norm, act, stride=2))
-
-        self.layers.append(conv_norm_act(get_out_c(n_layers - 1), get_out_c(n_layers), conv4x4, norm, act))
-        self.layers.append(conv4x4(get_out_c(n_layers), 1))
-
-    def forward(self, imgs_A: Tensor, imgs_B: Tensor):
-        return self.layers(torch.cat([imgs_A, imgs_B], dim=1))
-
-
-# official PyTorch code does not use learnable affine for Instance norm
-class UnetGenerator(nn.Module):
-    def __init__(
-        self,
-        A_channels: int = 3,
-        B_channels: int = 3,
-        n_stages: int = 7,
-        base_channels: int = 64,
-        norm: _Norm = nn.InstanceNorm2d,
-        down_act: _Act = leaky_relu,
-        up_act: _Act = relu,
-    ):
-        super().__init__()
-        down_conv4x4 = partial(nn.Conv2d, kernel_size=4, stride=2, padding=1)
-        up_conv4x4 = partial(nn.ConvTranspose2d, kernel_size=4, stride=2, padding=1)
-
-        def get_out_c(idx: int):
-            return base_channels * 2 ** min(idx, 3)
-
-        def act_conv_norm(in_c: int, out_c: int, down: bool):
-            return nn.Sequential(
-                (down_act if down else up_act)(),
-                (down_conv4x4 if down else up_conv4x4)(in_c, out_c, bias=False),
-                norm(out_c),
-            )
-
-        self.downs = nn.ModuleList()
-        self.downs.append(down_conv4x4(A_channels, base_channels))
-        for i in range(1, n_stages - 1):
-            self.downs.append(act_conv_norm(get_out_c(i - 1), get_out_c(i), True))
-
-        self.last_stage = nn.Sequential(
-            down_act(),
-            down_conv4x4(get_out_c(n_stages - 2), get_out_c(n_stages - 1)),
-            up_act(),
-            up_conv4x4(get_out_c(n_stages - 1), get_out_c(n_stages - 2), bias=False),
-            norm(get_out_c(n_stages - 2)),
-        )
-
-        self.ups = nn.ModuleList()
-        for i in range(n_stages - 2, 0, -1):
-            self.ups.append(act_conv_norm(get_out_c(i) * 2, get_out_c(i - 1), False))
-        self.ups.append(nn.Sequential(up_act(), up_conv4x4(get_out_c(0) * 2, B_channels), nn.Tanh()))
+        # original code uses kernel_size=4 here
+        out_ch = base_dim * 2 ** min(depth, 3)
+        self.append(conv_norm_act(in_ch, out_ch, 3, norm="instance", act="leaky_relu"))
+        self.append(nn.Conv2d(out_ch, 1, 3, 1, 1))
 
         self.reset_parameters()
 
     def reset_parameters(self):
         self.apply(init_weights)
 
-    def forward(self, imgs: Tensor):
-        fmaps = []
-        for down in self.downs:
-            imgs = down(imgs)
-            fmaps.append(imgs)
+    def forward(self, As: Tensor, Bs: Tensor):
+        return super().forward(torch.cat([As, Bs], dim=1))
 
-        out = self.last_stage(imgs)
 
-        for up in self.ups:
+class UnetGenerator(nn.Module):
+    def __init__(self, A_channels: int = 3, B_channels: int = 3, depth: int = 7, base_dim: int = 64):
+        super().__init__()
+        self.down_blocks = nn.ModuleList()
+        self.down_blocks.append(nn.Conv2d(A_channels, base_dim, 4, 2, 1))
+        in_ch = base_dim
+        for i in range(1, depth - 1):
+            out_ch = base_dim * 2 ** min(i, 3)
+            block = nn.Sequential(
+                nn.LeakyReLU(0.2, inplace=True),
+                nn.Conv2d(in_ch, out_ch, 4, 2, 1),
+                nn.InstanceNorm2d(out_ch),
+            )
+            self.down_blocks.append(block)
+            in_ch = out_ch
+
+        out_ch = base_dim * 2 ** min(depth - 1, 3)
+        self.inner_most = nn.Sequential(
+            nn.LeakyReLU(0.2, inplace=True),
+            nn.Conv2d(in_ch, out_ch, 4, 2, 1),
+            nn.ReLU(inplace=True),
+            nn.ConvTranspose2d(out_ch, in_ch, 4, 2, 1),
+            nn.InstanceNorm2d(in_ch),
+        )
+
+        self.up_blocks = nn.ModuleList()
+        for i in range(depth - 3, -1, -1):
+            out_ch = base_dim * 2 ** min(i, 3)
+            block = nn.Sequential(
+                nn.ReLU(inplace=True),
+                nn.ConvTranspose2d(in_ch * 2, out_ch, 4, 2, 1),
+                nn.InstanceNorm2d(out_ch),
+            )
+            self.up_blocks.append(block)
+            in_ch = out_ch
+        self.up_blocks.append(
+            nn.Sequential(
+                nn.ReLU(inplace=True),
+                nn.ConvTranspose2d(in_ch * 2, B_channels, 4, 2, 1),
+                nn.Tanh(),
+            )
+        )
+
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        self.apply(init_weights)
+
+    def forward(self, x: Tensor):
+        fmaps = [x]
+        for down in self.down_blocks:
+            fmaps.append(down(fmaps[-1]))
+
+        out = self.inner_most(fmaps[-1])
+
+        for up in self.up_blocks:
             out = up(torch.cat([out, fmaps.pop()], 1))
-
         return out
+
+
+def init_weights(module: nn.Module):
+    if isinstance(module, nn.modules.conv._ConvNd):
+        nn.init.normal_(module.weight, 0, 0.02)
+        nn.init.zeros_(module.bias)

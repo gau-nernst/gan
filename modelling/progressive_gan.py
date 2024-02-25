@@ -14,13 +14,7 @@ import math
 import torch
 from torch import Tensor, nn
 
-
-class LayerNorm2d(nn.LayerNorm):
-    def forward(self, x: Tensor) -> Tensor:
-        out = x.flatten(-2).transpose(-1, -2)
-        out = super().forward(out)
-        out = out.transpose(-1, -2).unflatten(-1, x.shape[-2:])
-        return out
+from .common import LayerNorm2d
 
 
 class MinibatchStdDev(nn.Module):

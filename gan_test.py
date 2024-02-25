@@ -56,7 +56,7 @@ def test_generator_compile(name):
 
 
 def test_patch_gan():
-    m = modelling.PatchGAN(IMG_CHANNELS, IMG_CHANNELS)
+    m = modelling.PatchGan(IMG_CHANNELS, IMG_CHANNELS)
     out = m(torch.randn(IMG_SHAPE), torch.randn(IMG_SHAPE))
     assert out.shape == (BATCH_SIZE, 1, IMG_SIZE // 8 - 2, IMG_SIZE // 8 - 2)
 
@@ -77,7 +77,7 @@ def test_img2img_sr_generator(cls):
 
 def test_progressive_gan_discriminator():
     size = 4
-    disc = modelling.ProgressiveGANDiscriminator(
+    disc = modelling.ProgressiveGanDiscriminator(
         img_size=IMG_SIZE,
         img_channels=IMG_CHANNELS,
         z_dim=Z_DIM,
@@ -95,7 +95,7 @@ def test_progressive_gan_discriminator():
 
 def test_progressive_gan_generator():
     size = 4
-    gen = modelling.ProgressiveGANGenerator(
+    gen = modelling.ProgressiveGanGenerator(
         img_size=IMG_SIZE,
         img_channels=IMG_CHANNELS,
         z_dim=Z_DIM,

@@ -2,21 +2,23 @@
 #
 # Code reference:
 # https://github.com/xinntao/ESRGAN
-# nearest-neighbour upsample + 3x3 conv is replaced with 4x4 conv transpose with stride=2
 
 import torch
 from torch import Tensor, nn
 
-from .base import _Act, conv3x3, leaky_relu
-
 
 # inspired by DenseNet - https://arxiv.org/abs/1608.06993
 class DenseBlock(nn.ModuleList):
-    def __init__(self, channels: int, growth_rate: int = 32, n_layers: int = 5, act: _Act = leaky_relu):
+    def __init__(self, dim: int, growth_rate: int = 32, depth: int = 5):
         super().__init__()
-        for i in range(n_layers - 1):
-            self.append(nn.Sequential(conv3x3(channels + growth_rate * i, growth_rate), act()))
-        self.append(conv3x3(channels + growth_rate * (n_layers - 1), channels))
+        for i in range(depth - 1):
+            self.append(
+                nn.Sequential(
+                    nn.Conv2d(dim + growth_rate * i, growth_rate, 3, 1, 1),
+                    nn.LeakyReLU(0.2, inplace=True),
+                )
+            )
+        self.append(nn.Conv2d(dim + growth_rate * (depth - 1), dim, 3, 1, 1))
 
     def forward(self, imgs: Tensor) -> Tensor:
         out = [imgs]
@@ -39,24 +41,29 @@ class RRDBlock(nn.Module):
 
 
 class ESRGANGenerator(nn.Module):
-    def __init__(
-        self,
-        img_channels: int = 3,
-        base_channels: int = 64,
-        n_blocks: int = 8,
-        upsample: int = 2,
-        act: _Act = leaky_relu,
-    ):
+    def __init__(self, img_channels: int = 3, base_dim: int = 64, n_blocks: int = 8, upsample: int = 2) -> None:
         super().__init__()
-        self.input_layer = conv3x3(img_channels, base_channels)
+        self.input_layer = nn.Conv2d(img_channels, base_dim, 3, 1, 1)
 
-        self.trunk = nn.Sequential(*[RRDBlock(base_channels) for _ in range(n_blocks)])
-        self.trunk.append(conv3x3(base_channels, base_channels))
+        self.trunk = nn.Sequential(*[RRDBlock(base_dim) for _ in range(n_blocks)])
+        self.trunk.append(nn.Conv2d(base_dim, base_dim, 3, 1, 1))
 
         self.output_layer = nn.Sequential()
         for _ in range(upsample):
-            self.output_layer.extend([nn.ConvTranspose2d(base_channels, base_channels, 4, 2, 1), act()])
-        self.output_layer.extend([conv3x3(base_channels, base_channels), act(), conv3x3(base_channels, img_channels)])
+            self.output_layer.extend(
+                [
+                    nn.Upsample(scale_factor=2.0),
+                    nn.ConvTranspose2d(base_dim, base_dim, 3, 1, 1),
+                    nn.LeakyReLU(0.2, inplace=True),
+                ]
+            )
+        self.output_layer.extend(
+            [
+                nn.Conv2d(base_dim, base_dim, 3, 1, 1),
+                nn.LeakyReLU(0.2, inplace=True),
+                nn.Conv2d(base_dim, img_channels, 3, 1, 1),
+            ]
+        )
 
     def forward(self, imgs: Tensor) -> Tensor:
         out = self.input_layer(imgs)

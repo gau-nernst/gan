@@ -14,8 +14,6 @@ import torch.nn.functional as F
 from torch import Tensor, nn
 from torch.cuda.amp.autocast_mode import custom_bwd, custom_fwd
 
-from .base import conv1x1
-
 
 def upfirdn2d(imgs: Tensor, kernel: Tensor, up: int, down: int, px1: int, px2: int, py1: int, py2: int):
     n, c, h, w = imgs.shape
@@ -94,7 +92,7 @@ def up_conv_blur(
             nn.Conv2d(in_channels, out_channels, kernel_size, 1, padding),
         )
     elif kernel_size == 1:  # this is never used
-        layers = nn.Sequential(conv1x1(in_channels, out_channels), Blur(blur_size, up=2))
+        layers = nn.Sequential(nn.Conv2d(in_channels, out_channels, 1), Blur(blur_size, up=2))
     else:
         layers = nn.Sequential(
             nn.ConvTranspose2d(in_channels, out_channels, kernel_size, 2, padding, output_padding),
@@ -116,7 +114,7 @@ def blur_conv_down(
             nn.AvgPool2d(2),
         )
     elif kernel_size == 1:
-        layers = nn.Sequential(Blur(blur_size, down=2), conv1x1(in_channels, out_channels))
+        layers = nn.Sequential(Blur(blur_size, down=2), nn.Conv2d(in_channels, out_channels, 1))
     else:
         layers = nn.Sequential(
             Blur(blur_size),

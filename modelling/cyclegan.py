@@ -3,57 +3,51 @@
 # Code reference:
 # https://github.com/junyanz/pytorch-CycleGAN-and-pix2pix
 
-from functools import partial
-
 from torch import Tensor, nn
 
-from .base import _Act, _Norm, conv3x3, conv_norm_act
-from .dcgan import init_weights
+from .common import conv_norm_act
+from .pix2pix import init_weights
 
 
-# almost identical to torchvision.models.resnet.BasicBlock
-class ResNetBlock(nn.Module):
-    def __init__(self, in_channels: int, out_channels: int, norm: _Norm, act: _Act):
-        super().__init__()
-        self.main = nn.Sequential(
-            conv_norm_act(in_channels, out_channels, conv3x3, norm, act),
-            conv_norm_act(out_channels, out_channels, conv3x3, norm, nn.Identity),
+# NOTE: original code uses affine=False for InstanceNorm2d
+class CycleGanResBlock(nn.Sequential):
+    def __init__(self, in_dim: int, out_dim: int) -> None:
+        super().__init__(
+            *conv_norm_act(in_dim, out_dim, 3, norm="instance", act="relu"),
+            *conv_norm_act(out_dim, out_dim, 3, norm="instance"),
         )
 
-    def forward(self, imgs: Tensor):
-        return imgs + self.main(imgs)
+    def forward(self, x: Tensor) -> Tensor:
+        return x + super().forward(x)
 
 
+# TODO: use StarGAN instead?
 class ResNetGenerator(nn.Sequential):
     def __init__(
-        self,
-        A_channels: int = 3,
-        B_channels: int = 3,
-        base_channels: int = 64,
-        n_blocks: int = 9,
-        downsample: int = 2,
-        norm: _Norm = nn.InstanceNorm2d,
-        act: _Act = partial(nn.ReLU, inplace=True),
-    ):
+        self, A_channels: int = 3, B_channels: int = 3, base_dim: int = 64, n_blocks: int = 9, downsample: int = 2
+    ) -> None:
         super().__init__()
-        conv7x7 = partial(nn.Conv2d, kernel_size=7, padding=3)
-        upconv3x3 = partial(nn.ConvTranspose2d, kernel_size=3, stride=2, padding=1, output_padding=1)
-
-        self.append(conv_norm_act(A_channels, base_channels, conv7x7, norm, act))
+        self.append(conv_norm_act(A_channels, base_dim, 7, norm="instance", act="relu"))
+        in_ch = base_dim
 
         for _ in range(downsample):
-            self.append(conv_norm_act(base_channels, base_channels * 2, conv3x3, norm, act, stride=2))
-            base_channels *= 2
+            self.append(conv_norm_act(in_ch, in_ch * 2, 3, 2), norm="instance", act="relu")
+            in_ch *= 2
 
         for _ in range(n_blocks):
-            self.append(ResNetBlock(base_channels, base_channels, norm, act))
+            self.append(CycleGanResBlock(in_ch))
 
         for _ in range(downsample):
-            self.append(conv_norm_act(base_channels, base_channels // 2, upconv3x3, norm, act))
-            base_channels //= 2
+            self.append(
+                nn.Sequential(
+                    nn.ConvTranspose2d(in_ch, in_ch // 2, 3, 2, 1, 1, bias=False),
+                    nn.InstanceNorm2d(in_ch // 2, affine=True),
+                    nn.ReLU(inplace=True),
+                )
+            )
+            in_ch //= 2
 
-        self.append(nn.Sequential(conv7x7(base_channels, B_channels), nn.Tanh()))
-
+        self.append(conv_norm_act(base_dim, B_channels, 7, act="tanh"))  # no norm
         self.reset_parameters()
 
     def reset_parameters(self):
