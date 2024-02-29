@@ -10,23 +10,18 @@ import math
 
 from torch import nn
 
-from .utils import get_norm
+from .common import conv_norm_act, get_norm
 
 
 class DcGanDiscriminator(nn.Sequential):
-    def __init__(self, img_channels: int = 3, img_size: int = 64, base_dim: int = 64, norm: str = "bn") -> None:
-        # no bn in the first conv layer
-        super().__init__(
-            nn.Conv2d(img_channels, base_dim, 4, 2, 1),
-            nn.LeakyReLU(0.2, inplace=True),
-        )
+    def __init__(self, img_size: int = 64, base_dim: int = 64, norm: str = "batch") -> None:
+        super().__init__()
+        self.append(conv_norm_act(3, base_dim, 4, 2, act="leaky_relu"))  # no norm
         in_ch = base_dim
 
         depth = int(math.log2(img_size / 4))  # downsample until 4x4
         for _ in range(depth - 1):
-            self.append(nn.Conv2d(in_ch, in_ch * 2, 4, 2, 1))
-            self.append(get_norm(in_ch * 2, norm))
-            self.append(nn.LeakyReLU(0.2, inplace=True))
+            self.append(conv_norm_act(in_ch, in_ch * 2, 4, 2, norm=norm, act="leaky_relu"))
             in_ch *= 2
 
         # flatten and matmul
@@ -39,31 +34,28 @@ class DcGanDiscriminator(nn.Sequential):
 
 
 class DcGanGenerator(nn.Sequential):
-    def __init__(
-        self, img_channels: int = 3, img_size: int = 64, base_dim: int = 64, z_dim: int = 128, norm: str = "bn"
-    ) -> None:
+    def __init__(self, img_size: int = 64, base_dim: int = 64, z_dim: int = 128, norm: str = "batch") -> None:
         depth = int(math.log2(img_size / 4))  # upsample from 4x4 to img_size
         out_ch = base_dim * 2 ** (depth - 1)
 
         # matmul and reshape to 4x4
-        super().__init__(
-            nn.Unflatten(-1, (z_dim, 1, 1)),
-            nn.ConvTranspose2d(z_dim, out_ch, 4),
-            get_norm(out_ch, norm),
-            nn.ReLU(inplace=True),
+        super().__init__()
+        self.append(
+            nn.Sequential(
+                nn.Unflatten(-1, (z_dim, 1, 1)),
+                nn.ConvTranspose2d(z_dim, out_ch, 4),
+                get_norm(norm, out_ch),
+                nn.ReLU(inplace=True),
+            )
         )
         in_ch = out_ch
 
         # conv transpose until reaching image size / 2
         for _ in range(depth - 1):
-            self.append(nn.ConvTranspose2d(in_ch, in_ch // 2, 4, 2, 1))
-            self.append(get_norm(in_ch // 2, norm))
-            self.append(nn.ReLU(inplace=True))
+            self.append(conv_norm_act(in_ch, in_ch // 2, 4, 2, transpose=True, norm=norm, act="relu"))
             in_ch //= 2
 
-        # last layer: no bn and use tanh activation
-        self.append(nn.ConvTranspose2d(in_ch, img_channels, 4, 2, 1))
-        self.append(nn.Tanh())
+        self.append(conv_norm_act(in_ch, 3, 4, 2, transpose=True, act="tanh"))  # no norm
         self.reset_parameters()
 
     def reset_parameters(self):

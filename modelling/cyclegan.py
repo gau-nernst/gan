@@ -5,52 +5,49 @@
 
 from torch import Tensor, nn
 
+from .common import conv_norm_act
 from .pix2pix import init_weights
 
 
-# almost identical to torchvision.models.resnet.BasicBlock
-class ResNetBlock(nn.Sequential):
-    def __init__(self, dim: int) -> None:
+# NOTE: original code uses affine=False for InstanceNorm2d
+class CycleGanResBlock(nn.Sequential):
+    def __init__(self, in_dim: int, out_dim: int) -> None:
         super().__init__(
-            nn.Conv2d(dim, dim, 3, 1, 1),
-            nn.InstanceNorm2d(dim),
-            nn.ReLU(inplace=True),
-            nn.Conv2d(dim, dim, 3, 1, 1),
-            nn.InstanceNorm2d(dim),
+            *conv_norm_act(in_dim, out_dim, 3, norm="instance", act="relu"),
+            *conv_norm_act(out_dim, out_dim, 3, norm="instance"),
         )
 
-    def forward(self, x: Tensor):
+    def forward(self, x: Tensor) -> Tensor:
         return x + super().forward(x)
 
 
+# TODO: use StarGAN instead?
 class ResNetGenerator(nn.Sequential):
     def __init__(
         self, A_channels: int = 3, B_channels: int = 3, base_dim: int = 64, n_blocks: int = 9, downsample: int = 2
     ) -> None:
         super().__init__()
-        self.append(nn.Conv2d(A_channels, base_dim, 7, 1, 3))
-        self.append(nn.InstanceNorm2d(base_dim))
-        self.append(nn.ReLU(inplace=True))
+        self.append(conv_norm_act(A_channels, base_dim, 7, norm="instance", act="relu"))
         in_ch = base_dim
 
         for _ in range(downsample):
-            self.append(nn.Conv2d(in_ch, in_ch * 2, 3, 2, 1))
-            self.append(nn.InstanceNorm2d(in_ch * 2))
-            self.append(nn.ReLU(inplace=True))
+            self.append(conv_norm_act(in_ch, in_ch * 2, 3, 2), norm="instance", act="relu")
             in_ch *= 2
 
         for _ in range(n_blocks):
-            self.append(ResNetBlock(in_ch))
+            self.append(CycleGanResBlock(in_ch))
 
         for _ in range(downsample):
-            self.append(nn.ConvTranspose2d(in_ch, in_ch // 2, 3, 2, 1, 1))
-            self.append(nn.InstanceNorm2d(in_ch // 2))
-            self.append(nn.ReLU(inplace=True))
+            self.append(
+                nn.Sequential(
+                    nn.ConvTranspose2d(in_ch, in_ch // 2, 3, 2, 1, 1, bias=False),
+                    nn.InstanceNorm2d(in_ch // 2, affine=True),
+                    nn.ReLU(inplace=True),
+                )
+            )
             in_ch //= 2
 
-        self.append(nn.Conv2d(base_dim, B_channels, 7, 1, 3))
-        self.append(nn.Tanh())
-
+        self.append(conv_norm_act(base_dim, B_channels, 7, act="tanh"))  # no norm
         self.reset_parameters()
 
     def reset_parameters(self):
