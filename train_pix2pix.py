@@ -65,7 +65,6 @@ class Pix2PixDataset(Dataset):
 
 @dataclass
 class TrainConfig:
-    model: str = "pix2pix"
     dataset: str = "none"
     disc_kwargs: dict = field(default_factory=dict)
     gen_kwargs: dict = field(default_factory=dict)
@@ -97,8 +96,8 @@ if __name__ == "__main__":
     for k, v in vars(cfg).items():
         print(f"  {k}: {v}")
 
-    disc = build_discriminator(cfg.model, **cfg.disc_kwargs).to(cfg.device)
-    gen = build_generator(cfg.model, **cfg.gen_kwargs).to(cfg.device)
+    disc = build_discriminator("pix2pix", **cfg.disc_kwargs).to(cfg.device)
+    gen = build_generator("pix2pix", **cfg.gen_kwargs).to(cfg.device)
     disc.apply(apply_spectral_norm) if cfg.sn_disc else None
     gen.apply(apply_spectral_norm) if cfg.sn_gen else None
     if cfg.channels_last:
