@@ -8,6 +8,7 @@ import torch
 from torch import Tensor, nn
 
 from .common import conv_norm_act
+from .dcgan import init_weights
 
 
 # NOTE: original code uses affine=False for InstanceNorm2d
@@ -95,9 +96,3 @@ class UnetGenerator(nn.Module):
         for up in self.up_blocks:
             out = up(torch.cat([out, fmaps.pop()], 1))
         return out
-
-
-def init_weights(module: nn.Module) -> None:
-    if isinstance(module, nn.modules.conv._ConvNd):
-        nn.init.normal_(module.weight, 0, 0.02)
-        nn.init.zeros_(module.bias)
