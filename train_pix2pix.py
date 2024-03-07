@@ -2,8 +2,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import torch
-import wandb
 import torch.nn.functional as F
+import wandb
 from torch import Tensor
 from torch.utils.data import DataLoader, Dataset
 from torchvision import io
