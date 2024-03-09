@@ -40,6 +40,15 @@ Notes in train script:
 - For mixed precision training, only bf16 is supported (so that I don't need to use gradient scaler).
 - No multi-GPU support.
 
+## Env setup
+
+Tested with PyTorch 2.2. Older PyTorch should work too.
+
+```bash
+conda install pytorch torchvision pytorch-cuda=12.1 -c pytorch -c nvidia
+pip install pytorch-fid tqdm wandb
+```
+
 ## Usage
 
 New script
