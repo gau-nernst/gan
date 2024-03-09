@@ -92,8 +92,8 @@ class TrainConfig:
     lr: float = 2e-4
     optimizer: str = "Adam"
     optimizer_kwargs: dict = field(default_factory=dict)
-    batch_size: int = 16
-    method: str = "gan"
+    batch_size: int = 8
+    method: str = "lsgan"
     regularizer: str = "none"
 
     run_name: str = "cyclegan"
@@ -177,7 +177,7 @@ if __name__ == "__main__":
                     fake_As = gen1(Bs)
                     fake_Bs = gen2(As)
                 loss_d1 = criterion.d_loss(disc1(As, Bs), disc1(fake_As, Bs))
-                loss_d2 = criterion.d_loss(disc2(As, Bs), disc1(As, fake_Bs))
+                loss_d2 = criterion.d_loss(disc2(As, Bs), disc2(As, fake_Bs))
                 loss_d = loss_d1 + loss_d2
             loss_d.backward()
         optim_d.step()
@@ -189,12 +189,10 @@ if __name__ == "__main__":
             with autocast_ctx:
                 fake_As = gen1(Bs)
                 fake_Bs = gen2(As)
-                loss_g = (
-                    criterion.g_loss(disc1(fake_As, Bs), lambda: disc1(fake_As, Bs))
-                    + F.l1_loss(fake_As, As) * 100
-                    + criterion.g_loss(disc2(As, fake_Bs), lambda: disc2(As, fake_Bs))
-                    + F.l1_loss(fake_Bs, Bs) * 100
-                )
+                g_loss1 = criterion.g_loss(disc1(fake_As, Bs), lambda: disc1(As, Bs))
+                g_loss2 = criterion.g_loss(disc2(As, fake_Bs), lambda: disc2(As, Bs))
+                cycle_loss = F.l1_loss(gen1(fake_Bs), As) + F.l1_loss(gen2(fake_As), Bs)
+                loss_g = g_loss1 + g_loss2 + cycle_loss * 10
             loss_g.backward()
         optim_g.step()
         optim_g.zero_grad()
