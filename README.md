@@ -92,10 +92,11 @@ Progressive GAN with Hinge loss and spectral norm in Discriminator
 
 ![dcgan_celeba256_progran_resDresG_hinge](https://github.com/gau-nernst/gan/assets/26946864/a71647e7-c5e9-422f-9b0d-3bbfe402a6c9)
 
-Pix2Pix
+Pix2Pix and CycleGAN
 
 ```bash
-python train_pix2pix.py --dataset cityscapes --mixed_precision --channels_last
+python train_pix2pix.py --dataset cityscapes --mixed_precision --channels_last --compile --run_name cityscapes
+python train_cyclegan.py --dataset horse2zebra --mixed_precision --channels_last --compile --optimizer_kwargs '{"betas":[0.5,0.999]}' --run_name horse2zebra_beta0.5
 ```
 
 Old script
