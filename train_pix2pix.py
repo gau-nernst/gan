@@ -34,7 +34,7 @@ class Pix2PixDataset(Dataset):
     def __init__(self, root: str, dataset: str, split: str) -> None:
         super().__init__()
         assert dataset in self._datasets
-        data_dir = Path(root) / dataset
+        data_dir = Path(root) / "pix2pix" / dataset
 
         if not data_dir.exists():
             data_dir.mkdir(parents=True, exist_ok=True)
