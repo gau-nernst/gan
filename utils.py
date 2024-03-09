@@ -23,17 +23,28 @@ def make_parser(fn):
     return parser
 
 
-def normalize(x: Tensor) -> Tensor:
+def normalize_img(x: Tensor) -> Tensor:
     return (x / 255 - 0.5) / 0.5
 
 
-def unnormalize(x: Tensor) -> Tensor:
+def unnormalize_img(x: Tensor) -> Tensor:
     return ((x * 0.5 + 0.5) * 255).round().clip(0, 255).to(torch.uint8)
 
 
 def apply_spectral_norm(m: nn.Module):
     if isinstance(m, (nn.Linear, nn.modules.conv._ConvNd, nn.Embedding)):
         nn.utils.parametrizations.spectral_norm(m)
+
+
+def prepare_model(
+    model: nn.Module, *, spectral_norm: bool = False, channels_last: bool = False, compile: bool = False
+) -> None:
+    if spectral_norm:
+        model.apply(spectral_norm)
+    if channels_last:
+        model.to(memory_format=torch.channels_last)
+    if compile:
+        model.compile()
 
 
 def cycle(iterator):

@@ -13,7 +13,7 @@ from diff_augment import DiffAugment
 from fid import FID
 from losses import get_loss, get_regularizer
 from modelling import build_discriminator, build_generator
-from utils import EMA, apply_spectral_norm, cycle, make_parser, unnormalize
+from utils import EMA, cycle, make_parser, prepare_model, unnormalize_img
 
 
 torch.backends.cuda.matmul.allow_tf32 = True
@@ -60,15 +60,11 @@ if __name__ == "__main__":
 
     disc = build_discriminator(cfg.model, img_size=cfg.img_size, **cfg.disc_kwargs).to(cfg.device)
     gen = build_generator(cfg.model, img_size=cfg.img_size, **cfg.gen_kwargs).to(cfg.device)
-    disc.apply(apply_spectral_norm) if cfg.sn_disc else None
-    gen.apply(apply_spectral_norm) if cfg.sn_gen else None
+
     disc = nn.Sequential(DiffAugment(), disc) if cfg.diff_augment else disc
-    if cfg.channels_last:
-        gen.to(memory_format=torch.channels_last)
-        disc.to(memory_format=torch.channels_last)
-    if cfg.compile:
-        gen.compile()
-        disc.compile()
+
+    prepare_model(disc, spectral_norm=cfg.sn_disc, channels_last=cfg.channels_last, compile=cfg.compile)
+    prepare_model(gen, spectral_norm=cfg.sn_gen, channels_last=cfg.channels_last, compile=cfg.compile)
 
     print(disc)
     print(gen)
@@ -109,8 +105,8 @@ if __name__ == "__main__":
     else:
         celeba_stats = torch.load(celeba_stats_path, map_location="cpu")
 
-    logger = wandb.init(project="dcgan_celeba", name=cfg.run_name, config=vars(cfg))
-    log_img_dir = Path("images") / cfg.run_name
+    logger = wandb.init(project="celeba", name=cfg.run_name, config=vars(cfg))
+    log_img_dir = Path("images_celeba") / cfg.run_name
     log_img_dir.mkdir(parents=True, exist_ok=True)
 
     step = 0  # generator update step
@@ -174,7 +170,7 @@ if __name__ == "__main__":
                 with autocast_ctx, torch.no_grad():
                     fakes = model(fixed_zs)
                 fakes = fakes.cpu().unflatten(0, (10, 10)).permute(2, 0, 3, 1, 4).flatten(1, 2).flatten(-2, -1)
-                fakes = unnormalize(fakes)
+                fakes = unnormalize_img(fakes)
                 io.write_png(fakes, f"{log_img_dir}/step{step // 1000:04d}k{suffix}.png")
 
         if step % cfg.fid_interval == 0:

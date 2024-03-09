@@ -12,7 +12,7 @@ from tqdm import tqdm
 from diff_augment import rand_int, translate
 from losses import get_loss, get_regularizer
 from modelling import build_discriminator, build_generator
-from utils import EMA, apply_spectral_norm, cycle, make_parser, normalize, unnormalize
+from utils import EMA, cycle, make_parser, normalize_img, prepare_model, unnormalize_img
 
 
 torch.backends.cuda.matmul.allow_tf32 = True
@@ -29,9 +29,11 @@ def run_cmd(cmd: str):
 
 # https://efrosgans.eecs.berkeley.edu/pix2pix/datasets/
 class Pix2PixDataset(Dataset):
+    _datasets = ("cityscapes", "edges2handbags", "edges2shoes", "facades", "maps", "night2day")
+
     def __init__(self, root: str, dataset: str, split: str) -> None:
         super().__init__()
-        assert dataset in ("cityscapes", "edges2handbags", "edges2shoes", "facades", "maps", "night2day")
+        assert dataset in self._datasets
         data_dir = Path(root) / dataset
 
         if not data_dir.exists():
@@ -46,7 +48,7 @@ class Pix2PixDataset(Dataset):
 
     def __getitem__(self, idx: int) -> tuple[Tensor, Tensor]:
         img = io.read_image(str(self.data_dir / self.files[idx]), mode=io.ImageReadMode.RGB)
-        A, B = normalize(img).chunk(2, 2)
+        A, B = normalize_img(img).chunk(2, 2)
         if self.split == "train":
             if rand_int(0, 2) == 1:  # random horizontal flip
                 A = A.flip(-1)
@@ -98,14 +100,9 @@ if __name__ == "__main__":
 
     disc = build_discriminator("pix2pix", **cfg.disc_kwargs).to(cfg.device)
     gen = build_generator("pix2pix", **cfg.gen_kwargs).to(cfg.device)
-    disc.apply(apply_spectral_norm) if cfg.sn_disc else None
-    gen.apply(apply_spectral_norm) if cfg.sn_gen else None
-    if cfg.channels_last:
-        gen.to(memory_format=torch.channels_last)
-        disc.to(memory_format=torch.channels_last)
-    if cfg.compile:
-        gen.compile()
-        disc.compile()
+
+    prepare_model(disc, spectral_norm=cfg.sn_disc, channels_last=cfg.channels_last, compile=cfg.compile)
+    prepare_model(gen, spectral_norm=cfg.sn_gen, channels_last=cfg.channels_last, compile=cfg.compile)
 
     print(disc)
     print(gen)
@@ -140,7 +137,7 @@ if __name__ == "__main__":
     log_img_dir.mkdir(parents=True, exist_ok=True)
 
     reals = fixed_As.unflatten(0, (10, 10)).permute(2, 0, 3, 1, 4).flatten(1, 2).flatten(-2, -1)
-    io.write_png(unnormalize(reals), f"{log_img_dir}/reals.png")
+    io.write_png(unnormalize_img(reals), f"{log_img_dir}/reals.png")
 
     step = 0  # generator update step
     pbar = tqdm(total=cfg.n_iters, dynamic_ncols=True)
@@ -192,5 +189,5 @@ if __name__ == "__main__":
                 with autocast_ctx, torch.no_grad():
                     fakes = model(fixed_Bs)
                 fakes = fakes.cpu().unflatten(0, (10, 10)).permute(2, 0, 3, 1, 4).flatten(1, 2).flatten(-2, -1)
-                fakes = unnormalize(fakes)
+                fakes = unnormalize_img(fakes)
                 io.write_png(fakes, f"{log_img_dir}/step{step // 1000:04d}k{suffix}.png")
