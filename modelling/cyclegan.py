@@ -29,7 +29,7 @@ class ResNetGenerator(nn.Sequential):
         in_ch = base_dim
 
         for _ in range(downsample):
-            self.append(conv_norm_act(in_ch, in_ch * 2, 3, 2), norm="instance", act="relu")
+            self.append(conv_norm_act(in_ch, in_ch * 2, 3, 2, norm="instance", act="relu"))
             in_ch *= 2
 
         self.extend([CycleGanResBlock(in_ch, dropout) for _ in range(n_blocks)])
