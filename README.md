@@ -1,7 +1,5 @@
 # Generative Adversarial Networks (GANs)
 
-NOTE: I'm in the midst of re-writing the training script. Some of the commands below might not run correctly.
-
 Features:
 
 - GAN losses:
@@ -24,10 +22,10 @@ Features:
     - (Modified) [StyleGAN2](https://arxiv.org/abs/1912.04958)
   - [SA-GAN](https://arxiv.org/pdf/1805.08318)
 - Img2Img:
-  - Pix2Pix / CycleGAN: PatchGAN discriminator, Unet and ResNet generator
+  - [Pix2Pix](https://arxiv.org/abs/1611.07004) / [CycleGAN](https://arxiv.org/abs/1703.10593): PatchGAN discriminator, Unet and ResNet generator
     - Dropout not included. Batch norm is replaced with Instance norm.
     - Not implemented: train Discrimiantor with past generated samples
-  - TODO: Pix2PixHD, AnimeGAN, SRGAN, ESRGAN
+  - TODO: Pix2PixHD, AnimeGAN, SRGAN, ESRGAN, StarGAN
 
 TODO:
 
@@ -51,17 +49,15 @@ pip install pytorch-fid tqdm wandb
 
 ## Usage
 
-New script
-
 ```bash
-python train_celeba.py --run_name dcgan_celeba --lr 2e-5 --optimizer Adam --optimizer_kwargs '{"betas":[0.5,0.999]}' --batch_size 128 --mixed_precision --channels_last
-python train_celeba.py --run_name dcgan_celeba_wgan --lr 5e-5 --optimizer RMSprop --batch_size 64 --n_disc 5 --method wgan --mixed_precision --channels_last
-python train_celeba.py --run_name dcgan_celeba_wgan-gp --disc_kwargs '{"norm":"none"}' --lr 1e-4 --optimizer Adam --optimizer_kwargs '{"betas":[0,0.9]}' --batch_size 64 --n_disc 5 --method wgan --regularizer wgan-gp --mixed_precision --channels_last
-python train_celeba.py --run_name dcgan_celeba_sngan --disc_kwargs '{"norm":"none"}' --sn_disc --lr 1e-4 --optimizer Adam --optimizer_kwargs '{"betas":[0.5,0.999]}' --batch_size 64 --method hinge --mixed_precision --channels_last
-python train_celeba.py --run_name dcgan_celeba_rgan --disc_kwargs '{"norm":"none"}' --sn_disc --lr 2e-4 --optimizer Adam --optimizer_kwargs '{"betas":[0.5,0.999]}' --batch_size 64 --method relativistic-gan --mixed_precision --channels_last
-python train_celeba.py --run_name dcgan_celeba_sagan --model sagan --sn_disc --sn_gen --lr 2e-4 --optimizer Adam --optimizer_kwargs '{"betas":[0,0.9]}' --batch_size 256 --method hinge --mixed_precision --channels_last
-python train_celeba.py --run_name progan_celeba_hinge --model progressive_gan --disc_kwargs '{"base_dim":64}' --sn_disc --gen_kwargs '{"base_dim":64}' --sn_gen --lr 2e-4 --optimizer Adam --optimizer_kwargs '{"betas":[0,0.9]}' --batch_size 64 --method hinge --mixed_precision --channels_last
-python train_celeba.py --run_name stylegan_celeba_hinge_r1 --model stylegan --disc_kwargs '{"base_dim":64}' --gen_kwargs '{"base_dim":64}' --lr 2e-4 --optimizer Adam --optimizer_kwargs '{"betas":[0,0.9]}' --batch_size 64 --method hinge --regularizer r1 --mixed_precision --channels_last
+python train_celeba.py --run_name dcgan --lr 2e-5 --optimizer Adam --optimizer_kwargs '{"betas":[0.5,0.999]}' --batch_size 128 --mixed_precision --channels_last
+python train_celeba.py --run_name dcgan_wgan --lr 5e-5 --optimizer RMSprop --batch_size 64 --n_disc 5 --method wgan --mixed_precision --channels_last
+python train_celeba.py --run_name dcgan_wgan-gp --disc_kwargs '{"norm":"none"}' --lr 1e-4 --optimizer Adam --optimizer_kwargs '{"betas":[0,0.9]}' --batch_size 64 --n_disc 5 --method wgan --regularizer wgan-gp --mixed_precision --channels_last
+python train_celeba.py --run_name dcgan_sngan --disc_kwargs '{"norm":"none"}' --sn_disc --lr 1e-4 --optimizer Adam --optimizer_kwargs '{"betas":[0.5,0.999]}' --batch_size 64 --method hinge --mixed_precision --channels_last
+python train_celeba.py --run_name dcgan_rgan --disc_kwargs '{"norm":"none"}' --sn_disc --lr 2e-4 --optimizer Adam --optimizer_kwargs '{"betas":[0.5,0.999]}' --batch_size 64 --method relativistic-gan --mixed_precision --channels_last
+python train_celeba.py --run_name sagan --model sagan --sn_disc --sn_gen --lr 2e-4 --optimizer Adam --optimizer_kwargs '{"betas":[0,0.9]}' --batch_size 256 --method hinge --mixed_precision --channels_last
+python train_celeba.py --run_name progan_hinge --model progressive_gan --disc_kwargs '{"base_dim":64}' --sn_disc --gen_kwargs '{"base_dim":64}' --sn_gen --lr 2e-4 --optimizer Adam --optimizer_kwargs '{"betas":[0,0.9]}' --batch_size 64 --method hinge --mixed_precision --channels_last
+python train_celeba.py --run_name stylegan_hinge_r1 --model stylegan --disc_kwargs '{"base_dim":64}' --gen_kwargs '{"base_dim":64}' --lr 2e-4 --optimizer Adam --optimizer_kwargs '{"betas":[0,0.9]}' --batch_size 64 --method hinge --regularizer r1 --mixed_precision --channels_last
 ```
 
 NOTE:
@@ -92,59 +88,11 @@ Progressive GAN with Hinge loss and spectral norm in Discriminator
 
 ![dcgan_celeba256_progran_resDresG_hinge](https://github.com/gau-nernst/gan/assets/26946864/a71647e7-c5e9-422f-9b0d-3bbfe402a6c9)
 
-Pix2Pix and CycleGAN
+Pix2Pix and CycleGAN (by default, dropout=0 since I don't see any benefits of using them)
 
 ```bash
 python train_pix2pix.py --dataset cityscapes --mixed_precision --channels_last --compile --optimizer_kwargs '{"betas":[0.5,0.999]}' --run_name cityscapes
 python train_cyclegan.py --dataset horse2zebra --mixed_precision --channels_last --compile --optimizer_kwargs '{"betas":[0.5,0.999]}' --run_name horse2zebra
-```
-
-Old script
-
-Train DCGAN on MNIST (28x28 padded to 32x32)
-
-```bash
-python train_mnist.py
-```
-
-Add `--conditional` for conditional generation (using Conditional GAN. See `gan_mnist.py` for more details)
-
-Unconditional generation | Conditional generation
--------------------------|-----------------------
-<video src="https://user-images.githubusercontent.com/26946864/211148684-4e41a917-6459-408f-bd89-e99392ad918a.mp4"> | <video src="https://user-images.githubusercontent.com/26946864/211149361-368e77cb-584b-49fa-9b02-83f175abb422.mp4">
-
-Train DCGAN on CelebA (64x64)
-
-```bash
-python train_celeba.py --mixed_precision --log_dir images_celeba
-```
-
-Without EMA | With EMA
-------------|---------
-<video src="https://user-images.githubusercontent.com/26946864/211149449-0e45259a-ec81-4627-a6dd-6098373a0ee8.mp4"> | <video src="https://user-images.githubusercontent.com/26946864/211149453-770a043d-476c-4d57-8250-26bd9118801c.mp4">
-
-Train DCGAN with WGAN loss on CelebA, using hyperparameters specified in the paper
-
-```bash
-python gan_celeba.py --model dcgan --method wgan --img_size 64 --log_name celeba_dcgan_wgan --batch_size 64 --n_steps 100000 --optimizer RMSprop --lr 5e-5 --train_g_interval 5
-```
-
-Progressive GAN
-
-```bash
-python gan_celeba.py --model progressive_gan --loggers tensorboard --img_size 256 --z_dim 512 --batch_size 16 --method wgan-gp --log_name celeba_progressive_gan --n_steps 650000 --optimizer Adam --beta1 0 --beta2 0.99 --lr 1e-3 --ema --drift_penalty 0.001 --checkpoint_interval 50000
-```
-
-pix2pix (scaled up batch size and LR, enable EMA)
-
-```bash
-python gan_img2img.py --dataset edges2shoes --model pix2pix --loggers tensorboard --log_name pix2pix_edges2shoes --beta1 0.5 --beta2 0.999 --lr_d 1e-3 --lr_g 2e-3 --batch_size 40 --mixed_precision fp16 --checkpoint_interval 20_000 --n_steps 75_000 --ema --compile
-```
-
-CycleGAN
-
-```bash
-python gan_img2img.py --dataset horse2zebra --model cyclegan --method lsgan --loggers tensorboard --log_name cyclegan_horse2zebra --beta1 0.5 --beta2 0.999 --lr_d 1e-3 --lr_g 2e-3 --batch_size 10 --mixed_precision fp16 --checkpoint_interval 20_000 --n_steps 25_000 --ema --compile
 ```
 
 ## Lessons
