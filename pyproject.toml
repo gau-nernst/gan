@@ -5,3 +5,5 @@ line-length = 120
 profile = "black"
 line_length = 120
 lines_after_imports = 2
+known_third_party = ["wandb"]
+skip_glob = ["wandb/*"]

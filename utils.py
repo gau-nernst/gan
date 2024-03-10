@@ -5,6 +5,7 @@ import json
 
 import torch
 from torch import Tensor, nn
+from torch.utils.data import DataLoader, Dataset
 
 
 def make_parser(fn):
@@ -23,11 +24,11 @@ def make_parser(fn):
     return parser
 
 
-def normalize(x: Tensor) -> Tensor:
+def normalize_img(x: Tensor) -> Tensor:
     return (x / 255 - 0.5) / 0.5
 
 
-def unnormalize(x: Tensor) -> Tensor:
+def unnormalize_img(x: Tensor) -> Tensor:
     return ((x * 0.5 + 0.5) * 255).round().clip(0, 255).to(torch.uint8)
 
 
@@ -36,10 +37,38 @@ def apply_spectral_norm(m: nn.Module):
         nn.utils.parametrizations.spectral_norm(m)
 
 
-def cycle(iterator):
+def prepare_model(
+    model: nn.Module, *, spectral_norm: bool = False, channels_last: bool = False, compile: bool = False
+) -> None:
+    if spectral_norm:
+        model.apply(spectral_norm)
+    if channels_last:
+        model.to(memory_format=torch.channels_last)
+    if compile:
+        model.compile()
+
+
+def _tensor_to(x, *, device=None, channels_last: bool = False):
+    if isinstance(x, Tensor):
+        if channels_last and x.ndim == 4:
+            return x.to(device=device, memory_format=torch.channels_last)
+        else:
+            return x.to(device=device)
+    elif isinstance(x, (tuple, list)):
+        return x.__class__(_tensor_to(item, device=device, channels_last=channels_last) for item in x)
+    else:
+        raise ValueError(f"Unuspported type {type(x)}")
+
+
+def cycle(iterator, *, device=None, channels_last: bool = False):
     while True:
         for x in iterator:
-            yield x
+            yield _tensor_to(x, device=device, channels_last=channels_last)
+
+
+def prepare_train_dloader(ds: Dataset, batch_size: int, *, device=None, channels_last: bool = False):
+    dloader = DataLoader(ds, batch_size, shuffle=True, num_workers=4, pin_memory=True, drop_last=True)
+    return cycle(dloader, device=device, channels_last=channels_last)
 
 
 # reference: https://github.com/lucidrains/ema-pytorch

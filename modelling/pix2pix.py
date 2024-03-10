@@ -8,13 +8,14 @@ import torch
 from torch import Tensor, nn
 
 from .common import conv_norm_act
+from .dcgan import init_weights
 
 
 # NOTE: original code uses affine=False for InstanceNorm2d
 class PatchGan(nn.Sequential):
-    def __init__(self, A_channels: int = 3, B_channels: int = 3, base_dim: int = 64, depth: int = 3) -> None:
+    def __init__(self, base_dim: int = 64, depth: int = 3) -> None:
         super().__init__()
-        self.append(conv_norm_act(A_channels + B_channels, base_dim, 4, 2, act="leaky_relu"))
+        self.append(conv_norm_act(6, base_dim, 4, 2, act="leaky_relu"))
         in_ch = base_dim
 
         for i in range(1, depth):
@@ -29,18 +30,18 @@ class PatchGan(nn.Sequential):
 
         self.reset_parameters()
 
-    def reset_parameters(self):
+    def reset_parameters(self) -> None:
         self.apply(init_weights)
 
-    def forward(self, As: Tensor, Bs: Tensor):
-        return super().forward(torch.cat([As, Bs], dim=1))
+    def forward(self, x1: Tensor, x2: Tensor) -> Tensor:
+        return super().forward(torch.cat([x1, x2], dim=1))
 
 
 class UnetGenerator(nn.Module):
-    def __init__(self, A_channels: int = 3, B_channels: int = 3, depth: int = 7, base_dim: int = 64):
+    def __init__(self, depth: int = 7, base_dim: int = 64, dropout=0.0) -> None:
         super().__init__()
         self.down_blocks = nn.ModuleList()
-        self.down_blocks.append(nn.Conv2d(A_channels, base_dim, 4, 2, 1))
+        self.down_blocks.append(nn.Conv2d(3, base_dim, 4, 2, 1))
         in_ch = base_dim
         for i in range(1, depth - 1):
             out_ch = base_dim * 2 ** min(i, 3)
@@ -68,23 +69,24 @@ class UnetGenerator(nn.Module):
                 nn.ReLU(inplace=True),
                 nn.ConvTranspose2d(in_ch * 2, out_ch, 4, 2, 1),
                 nn.InstanceNorm2d(out_ch),
+                nn.Dropout(dropout),
             )
             self.up_blocks.append(block)
             in_ch = out_ch
         self.up_blocks.append(
             nn.Sequential(
                 nn.ReLU(inplace=True),
-                nn.ConvTranspose2d(in_ch * 2, B_channels, 4, 2, 1),
+                nn.ConvTranspose2d(in_ch * 2, 3, 4, 2, 1),
                 nn.Tanh(),
             )
         )
 
         self.reset_parameters()
 
-    def reset_parameters(self):
+    def reset_parameters(self) -> None:
         self.apply(init_weights)
 
-    def forward(self, x: Tensor):
+    def forward(self, x: Tensor) -> Tensor:
         fmaps = [x]
         for down in self.down_blocks:
             fmaps.append(down(fmaps[-1]))
@@ -94,9 +96,3 @@ class UnetGenerator(nn.Module):
         for up in self.up_blocks:
             out = up(torch.cat([out, fmaps.pop()], 1))
         return out
-
-
-def init_weights(module: nn.Module):
-    if isinstance(module, nn.modules.conv._ConvNd):
-        nn.init.normal_(module.weight, 0, 0.02)
-        nn.init.zeros_(module.bias)

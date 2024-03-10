@@ -4,7 +4,6 @@ from pathlib import Path
 import torch
 import wandb
 from torch import nn
-from torch.utils.data import DataLoader
 from torchvision import datasets, io
 from torchvision.transforms import v2
 from tqdm import tqdm
@@ -13,7 +12,7 @@ from diff_augment import DiffAugment
 from fid import FID
 from losses import get_loss, get_regularizer
 from modelling import build_discriminator, build_generator
-from utils import EMA, apply_spectral_norm, cycle, make_parser, unnormalize
+from utils import EMA, make_parser, prepare_model, prepare_train_dloader, unnormalize_img
 
 
 torch.backends.cuda.matmul.allow_tf32 = True
@@ -60,15 +59,11 @@ if __name__ == "__main__":
 
     disc = build_discriminator(cfg.model, img_size=cfg.img_size, **cfg.disc_kwargs).to(cfg.device)
     gen = build_generator(cfg.model, img_size=cfg.img_size, **cfg.gen_kwargs).to(cfg.device)
-    disc.apply(apply_spectral_norm) if cfg.sn_disc else None
-    gen.apply(apply_spectral_norm) if cfg.sn_gen else None
+
     disc = nn.Sequential(DiffAugment(), disc) if cfg.diff_augment else disc
-    if cfg.channels_last:
-        gen.to(memory_format=torch.channels_last)
-        disc.to(memory_format=torch.channels_last)
-    if cfg.compile:
-        gen.compile()
-        disc.compile()
+
+    prepare_model(disc, spectral_norm=cfg.sn_disc, channels_last=cfg.channels_last, compile=cfg.compile)
+    prepare_model(gen, spectral_norm=cfg.sn_gen, channels_last=cfg.channels_last, compile=cfg.compile)
 
     print(disc)
     print(gen)
@@ -83,18 +78,16 @@ if __name__ == "__main__":
 
     transform = v2.Compose(
         [
-            v2.ToImage(),
             v2.Resize(cfg.img_size, interpolation=v2.InterpolationMode.BICUBIC, antialias=True),
             v2.CenterCrop(cfg.img_size),
+            v2.ToImage(),
             v2.ToDtype(torch.float32, scale=True),
             v2.Normalize([0.5, 0.5, 0.5], [0.5, 0.5, 0.5]),
         ]
     )
     ds = datasets.CelebA("data", transform=transform, download=True)
-    dloader = DataLoader(
-        ds, cfg.batch_size // cfg.grad_accum, shuffle=True, num_workers=4, pin_memory=True, drop_last=True
-    )
-    dloader = cycle(dloader)
+    _bsize = cfg.batch_size // cfg.grad_accum
+    dloader = prepare_train_dloader(ds, _bsize, device=cfg.device, channels_last=cfg.channels_last)
 
     autocast_ctx = torch.autocast(cfg.device, dtype=torch.bfloat16, enabled=cfg.mixed_precision)
     fixed_zs = torch.randn(100, 128, device=cfg.device)
@@ -103,14 +96,14 @@ if __name__ == "__main__":
     celeba_stats_path = Path(f"celeba{cfg.img_size}_stats.pth")
 
     if not celeba_stats_path.exists():
-        celeba_stats = fid_scorer.compute_stats(lambda: next(dloader)[0].to(cfg.device))
+        celeba_stats = fid_scorer.compute_stats(lambda: next(dloader)[0])
         torch.save(celeba_stats, celeba_stats_path)
 
     else:
         celeba_stats = torch.load(celeba_stats_path, map_location="cpu")
 
-    logger = wandb.init(project="dcgan_celeba", name=cfg.run_name, config=vars(cfg))
-    log_img_dir = Path("images") / cfg.run_name
+    logger = wandb.init(project="celeba", name=cfg.run_name, config=vars(cfg))
+    log_img_dir = Path("images_celeba") / cfg.run_name
     log_img_dir.mkdir(parents=True, exist_ok=True)
 
     step = 0  # generator update step
@@ -126,9 +119,6 @@ if __name__ == "__main__":
 
             for _ in range(cfg.grad_accum):
                 reals, _ = next(dloader)
-                reals = reals.to(cfg.device)
-                if cfg.channels_last:
-                    reals = reals.to(memory_format=torch.channels_last)
                 if cached_reals is not None:
                     cached_reals.append(reals.clone())  # cached for generator later
                 reals.requires_grad_()
@@ -174,7 +164,7 @@ if __name__ == "__main__":
                 with autocast_ctx, torch.no_grad():
                     fakes = model(fixed_zs)
                 fakes = fakes.cpu().unflatten(0, (10, 10)).permute(2, 0, 3, 1, 4).flatten(1, 2).flatten(-2, -1)
-                fakes = unnormalize(fakes)
+                fakes = unnormalize_img(fakes)
                 io.write_png(fakes, f"{log_img_dir}/step{step // 1000:04d}k{suffix}.png")
 
         if step % cfg.fid_interval == 0:

@@ -2,17 +2,17 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import torch
-import wandb
 import torch.nn.functional as F
+import wandb
 from torch import Tensor
-from torch.utils.data import DataLoader, Dataset
+from torch.utils.data import Dataset
 from torchvision import io
 from tqdm import tqdm
 
 from diff_augment import rand_int, translate
 from losses import get_loss, get_regularizer
 from modelling import build_discriminator, build_generator
-from utils import EMA, apply_spectral_norm, cycle, make_parser, normalize, unnormalize
+from utils import EMA, make_parser, normalize_img, prepare_model, prepare_train_dloader, unnormalize_img
 
 
 torch.backends.cuda.matmul.allow_tf32 = True
@@ -29,10 +29,12 @@ def run_cmd(cmd: str):
 
 # https://efrosgans.eecs.berkeley.edu/pix2pix/datasets/
 class Pix2PixDataset(Dataset):
+    _datasets = ("cityscapes", "edges2handbags", "edges2shoes", "facades", "maps", "night2day")
+
     def __init__(self, root: str, dataset: str, split: str) -> None:
         super().__init__()
-        assert dataset in ("cityscapes", "edges2handbags", "edges2shoes", "facades", "maps", "night2day")
-        data_dir = Path(root) / dataset
+        assert dataset in self._datasets
+        data_dir = Path(root) / "pix2pix" / dataset
 
         if not data_dir.exists():
             data_dir.mkdir(parents=True, exist_ok=True)
@@ -46,7 +48,7 @@ class Pix2PixDataset(Dataset):
 
     def __getitem__(self, idx: int) -> tuple[Tensor, Tensor]:
         img = io.read_image(str(self.data_dir / self.files[idx]), mode=io.ImageReadMode.RGB)
-        A, B = normalize(img).chunk(2, 2)
+        A, B = normalize_img(img).chunk(2, 2)
         if self.split == "train":
             if rand_int(0, 2) == 1:  # random horizontal flip
                 A = A.flip(-1)
@@ -65,7 +67,6 @@ class Pix2PixDataset(Dataset):
 
 @dataclass
 class TrainConfig:
-    model: str = "pix2pix"
     dataset: str = "none"
     disc_kwargs: dict = field(default_factory=dict)
     gen_kwargs: dict = field(default_factory=dict)
@@ -97,16 +98,11 @@ if __name__ == "__main__":
     for k, v in vars(cfg).items():
         print(f"  {k}: {v}")
 
-    disc = build_discriminator(cfg.model, **cfg.disc_kwargs).to(cfg.device)
-    gen = build_generator(cfg.model, **cfg.gen_kwargs).to(cfg.device)
-    disc.apply(apply_spectral_norm) if cfg.sn_disc else None
-    gen.apply(apply_spectral_norm) if cfg.sn_gen else None
-    if cfg.channels_last:
-        gen.to(memory_format=torch.channels_last)
-        disc.to(memory_format=torch.channels_last)
-    if cfg.compile:
-        gen.compile()
-        disc.compile()
+    disc = build_discriminator("pix2pix", **cfg.disc_kwargs).to(cfg.device)
+    gen = build_generator("pix2pix", **cfg.gen_kwargs).to(cfg.device)
+
+    prepare_model(disc, spectral_norm=cfg.sn_disc, channels_last=cfg.channels_last, compile=cfg.compile)
+    prepare_model(gen, spectral_norm=cfg.sn_gen, channels_last=cfg.channels_last, compile=cfg.compile)
 
     print(disc)
     print(gen)
@@ -120,10 +116,8 @@ if __name__ == "__main__":
     optim_g = optim_cls(gen.parameters(), cfg.lr, **cfg.optimizer_kwargs)
 
     ds = Pix2PixDataset("data", cfg.dataset, "train")
-    dloader = DataLoader(
-        ds, cfg.batch_size // cfg.grad_accum, shuffle=True, num_workers=4, pin_memory=True, drop_last=True
-    )
-    dloader = cycle(dloader)
+    _bsize = cfg.batch_size // cfg.grad_accum
+    dloader = prepare_train_dloader(ds, _bsize, device=cfg.device, channels_last=cfg.channels_last)
 
     autocast_ctx = torch.autocast(cfg.device, dtype=torch.bfloat16, enabled=cfg.mixed_precision)
     val_ds = Pix2PixDataset("data", cfg.dataset, "test" if cfg.dataset == "night2day" else "val")
@@ -137,23 +131,17 @@ if __name__ == "__main__":
     fixed_Bs = torch.stack(fixed_Bs, 0).to(cfg.device)
 
     logger = wandb.init(project="pix2pix", name=cfg.run_name, config=vars(cfg))
-    log_img_dir = Path("images") / cfg.run_name
+    log_img_dir = Path("images_pix2pix") / cfg.run_name
     log_img_dir.mkdir(parents=True, exist_ok=True)
 
     reals = fixed_As.unflatten(0, (10, 10)).permute(2, 0, 3, 1, 4).flatten(1, 2).flatten(-2, -1)
-    io.write_png(unnormalize(reals), f"{log_img_dir}/reals.png")
+    io.write_png(unnormalize_img(reals), f"{log_img_dir}/reals.png")
 
     step = 0  # generator update step
     pbar = tqdm(total=cfg.n_iters, dynamic_ncols=True)
     while step < cfg.n_iters:
         for _ in range(cfg.grad_accum):
             As, Bs = next(dloader)
-            As = As.to(cfg.device)
-            Bs = Bs.to(cfg.device)
-
-            if cfg.channels_last:
-                As = As.to(memory_format=torch.channels_last)
-                Bs = Bs.to(memory_format=torch.channels_last)
 
             with autocast_ctx:
                 with torch.no_grad():
@@ -193,5 +181,5 @@ if __name__ == "__main__":
                 with autocast_ctx, torch.no_grad():
                     fakes = model(fixed_Bs)
                 fakes = fakes.cpu().unflatten(0, (10, 10)).permute(2, 0, 3, 1, 4).flatten(1, 2).flatten(-2, -1)
-                fakes = unnormalize(fakes)
+                fakes = unnormalize_img(fakes)
                 io.write_png(fakes, f"{log_img_dir}/step{step // 1000:04d}k{suffix}.png")

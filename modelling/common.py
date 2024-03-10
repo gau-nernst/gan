@@ -48,13 +48,23 @@ def conv_norm_act(
     out_dim: int,
     kernel_size: int,
     stride: int = 1,
+    *,
     transpose: bool = False,
+    padding_mode: str = "zeros",
     norm: str = "none",
     act: str = "none",
 ) -> nn.Sequential:
     conv_cls = nn.ConvTranspose2d if transpose else nn.Conv2d
     return nn.Sequential(
-        conv_cls(in_dim, out_dim, kernel_size, stride, (kernel_size - 1) // 2, bias=norm in ("none", "layer")),
+        conv_cls(
+            in_dim,
+            out_dim,
+            kernel_size,
+            stride,
+            (kernel_size - 1) // 2,
+            bias=norm in ("none", "layer"),
+            padding_mode=padding_mode,
+        ),
         get_norm(norm, out_dim),
         get_act(act),
     )
@@ -65,7 +75,9 @@ def norm_act_conv(
     out_dim: int,
     kernel_size: int,
     stride: int = 1,
+    *,
     transpose: bool = False,
+    padding_mode: str = "zeros",
     norm: str = "none",
     act: str = "none",
 ) -> nn.Sequential:
@@ -73,5 +85,5 @@ def norm_act_conv(
     return nn.Sequential(
         get_norm(norm, in_dim),
         get_act(act),
-        conv_cls(in_dim, out_dim, kernel_size, stride, (kernel_size - 1) // 2),
+        conv_cls(in_dim, out_dim, kernel_size, stride, (kernel_size - 1) // 2, padding_mode=padding_mode),
     )

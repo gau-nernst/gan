@@ -3,6 +3,7 @@ from typing import Callable
 import torch
 from pytorch_fid.inception import InceptionV3
 from torch import Tensor, nn
+from tqdm import tqdm
 
 
 # there are 2 ways to improve this
@@ -18,11 +19,13 @@ class FID(nn.Module):
         all_outputs = torch.empty(10_000, 2048, device=self.device)
         i = 0
 
+        pbar = tqdm(total=10_000, desc="Computing Inception features")
         while i < 10_000:
             with torch.no_grad():
                 out = self.inception(closure())[0].flatten(1)
             j = min(i + out.shape[0], 10_000)
             all_outputs[i:j] = out[: j - i]
+            pbar.update(j - i)
             i = j
 
         return dict(mean=all_outputs.mean(0).cpu(), cov=all_outputs.T.cov().cpu())

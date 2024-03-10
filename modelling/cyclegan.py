@@ -6,36 +6,33 @@
 from torch import Tensor, nn
 
 from .common import conv_norm_act
-from .pix2pix import init_weights
+from .dcgan import init_weights
 
 
 # NOTE: original code uses affine=False for InstanceNorm2d
 class CycleGanResBlock(nn.Sequential):
-    def __init__(self, in_dim: int, out_dim: int) -> None:
+    def __init__(self, dim: int, dropout: float = 0.0) -> None:
         super().__init__(
-            *conv_norm_act(in_dim, out_dim, 3, norm="instance", act="relu"),
-            *conv_norm_act(out_dim, out_dim, 3, norm="instance"),
+            conv_norm_act(dim, dim, 3, padding_mode="reflect", norm="instance", act="relu"),
+            nn.Dropout(dropout),
+            conv_norm_act(dim, dim, 3, padding_mode="reflect", norm="instance"),
         )
 
     def forward(self, x: Tensor) -> Tensor:
         return x + super().forward(x)
 
 
-# TODO: use StarGAN instead?
 class ResNetGenerator(nn.Sequential):
-    def __init__(
-        self, A_channels: int = 3, B_channels: int = 3, base_dim: int = 64, n_blocks: int = 9, downsample: int = 2
-    ) -> None:
+    def __init__(self, base_dim: int = 64, n_blocks: int = 9, downsample: int = 2, dropout: float = 0.0) -> None:
         super().__init__()
-        self.append(conv_norm_act(A_channels, base_dim, 7, norm="instance", act="relu"))
+        self.append(conv_norm_act(3, base_dim, 7, padding_mode="reflect", norm="instance", act="relu"))
         in_ch = base_dim
 
         for _ in range(downsample):
-            self.append(conv_norm_act(in_ch, in_ch * 2, 3, 2), norm="instance", act="relu")
+            self.append(conv_norm_act(in_ch, in_ch * 2, 3, 2, norm="instance", act="relu"))
             in_ch *= 2
 
-        for _ in range(n_blocks):
-            self.append(CycleGanResBlock(in_ch))
+        self.extend([CycleGanResBlock(in_ch, dropout) for _ in range(n_blocks)])
 
         for _ in range(downsample):
             self.append(
@@ -47,8 +44,8 @@ class ResNetGenerator(nn.Sequential):
             )
             in_ch //= 2
 
-        self.append(conv_norm_act(base_dim, B_channels, 7, act="tanh"))  # no norm
+        self.append(conv_norm_act(base_dim, 3, 7, padding_mode="reflect", act="tanh"))  # no norm
         self.reset_parameters()
 
-    def reset_parameters(self):
+    def reset_parameters(self) -> None:
         self.apply(init_weights)
