@@ -41,7 +41,7 @@ def prepare_model(
     model: nn.Module, *, spectral_norm: bool = False, channels_last: bool = False, compile: bool = False
 ) -> None:
     if spectral_norm:
-        model.apply(spectral_norm)
+        model.apply(apply_spectral_norm)
     if channels_last:
         model.to(memory_format=torch.channels_last)
     if compile:
