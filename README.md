@@ -95,8 +95,8 @@ Progressive GAN with Hinge loss and spectral norm in Discriminator
 Pix2Pix and CycleGAN
 
 ```bash
-python train_pix2pix.py --dataset cityscapes --mixed_precision --channels_last --compile --run_name cityscapes
-python train_cyclegan.py --dataset horse2zebra --mixed_precision --channels_last --compile --optimizer_kwargs '{"betas":[0.5,0.999]}' --run_name horse2zebra_beta0.5
+python train_pix2pix.py --dataset cityscapes --mixed_precision --channels_last --compile --optimizer_kwargs '{"betas":[0.5,0.999]}' --run_name cityscapes
+python train_cyclegan.py --dataset horse2zebra --mixed_precision --channels_last --compile --optimizer_kwargs '{"betas":[0.5,0.999]}' --run_name horse2zebra
 ```
 
 Old script
