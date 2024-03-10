@@ -49,36 +49,22 @@ pip install pytorch-fid tqdm wandb
 
 ## Usage
 
-```bash
-python train_celeba.py --run_name dcgan --lr 2e-5 --optimizer Adam --optimizer_kwargs '{"betas":[0.5,0.999]}' --batch_size 128 --mixed_precision --channels_last
-python train_celeba.py --run_name dcgan_wgan --lr 5e-5 --optimizer RMSprop --batch_size 64 --n_disc 5 --method wgan --mixed_precision --channels_last
-python train_celeba.py --run_name dcgan_wgan-gp --disc_kwargs '{"norm":"none"}' --lr 1e-4 --optimizer Adam --optimizer_kwargs '{"betas":[0,0.9]}' --batch_size 64 --n_disc 5 --method wgan --regularizer wgan-gp --mixed_precision --channels_last
-python train_celeba.py --run_name dcgan_sngan --disc_kwargs '{"norm":"none"}' --sn_disc --lr 1e-4 --optimizer Adam --optimizer_kwargs '{"betas":[0.5,0.999]}' --batch_size 64 --method hinge --mixed_precision --channels_last
-python train_celeba.py --run_name dcgan_rgan --disc_kwargs '{"norm":"none"}' --sn_disc --lr 2e-4 --optimizer Adam --optimizer_kwargs '{"betas":[0.5,0.999]}' --batch_size 64 --method relativistic-gan --mixed_precision --channels_last
-python train_celeba.py --run_name sagan --model sagan --sn_disc --sn_gen --lr 2e-4 --optimizer Adam --optimizer_kwargs '{"betas":[0,0.9]}' --batch_size 256 --method hinge --mixed_precision --channels_last
-python train_celeba.py --run_name progan_hinge --model progressive_gan --disc_kwargs '{"base_dim":64}' --sn_disc --gen_kwargs '{"base_dim":64}' --sn_gen --lr 2e-4 --optimizer Adam --optimizer_kwargs '{"betas":[0,0.9]}' --batch_size 64 --method hinge --mixed_precision --channels_last
-python train_celeba.py --run_name stylegan_hinge_r1 --model stylegan --disc_kwargs '{"base_dim":64}' --gen_kwargs '{"base_dim":64}' --lr 2e-4 --optimizer Adam --optimizer_kwargs '{"betas":[0,0.9]}' --batch_size 64 --method hinge --regularizer r1 --mixed_precision --channels_last
-```
+### CelebA 64x64
 
-NOTE:
-- SN-GAN didn't exactly use DCGAN architecture.
-- SAGAN uses different learning rates for Generator (1e-4) and Discriminator (4e-4). 
-- Progressive GAN: No progressive growing and equalized learning rate. With residual discriminator and generator. Trained with SA-GAN hyperparameters (Hinge loss, spectral norm for both discriminator and generator).
+By default, the generator is trained for 30k iterations. EMA is always used. FID is calculated using 10k samples.
 
-Results: CelebA 64x64, 30k generator iterations, trained with bf16 on single 3070. Training time includes FID calculation, which is quite slow. EMA is used. FID is calculated using 10k samples.
+Model | Loss | Batch size | Command | FID | Note | Samples
+------|------|------------|---------|-----|------|--------
+DCGAN | Original GAN | 128 | `python train_celeba.py --run_name dcgan --lr 2e-5 --optimizer_kwargs '{"betas":[0.5,0.999]}' --batch_size 128 --mixed_precision --channels_last` | 51.66 | |
+DCGAN | WGAN | 64 | `python train_celeba.py --run_name dcgan_wgan --lr 5e-5 --optimizer RMSprop --batch_size 64 --n_disc 5 --method wgan --mixed_precision --channels_last` | 26.16 | |
+DCGAN | WGAN-GP | 64 | `python train_celeba.py --run_name dcgan_wgangp --disc_kwargs '{"norm":"none"}' --lr 1e-4 --optimizer_kwargs '{"betas":[0,0.9]}' --batch_size 64 --n_disc 5 --method wgan --regularizer wgan-gp --mixed_precision --channels_last` | 17.26 | No bn in discriminator. |
+DCGAN | Hinge | 64 | `python train_celeba.py --run_name dcgan_sngan --disc_kwargs '{"norm":"none"}' --sn_disc --lr 1e-4 --optimizer_kwargs '{"betas":[0.5,0.999]}' --batch_size 64 --method hinge --mixed_precision --channels_last` | 23.10 | **SN-GAN**. No bn in discriminator. Spectral norm in discriminator. Original SN-GAN did not use DCGAN architecture. |
+DCGAN | Relativistic GAN | 64 | `python train_celeba.py --run_name dcgan_rgan --disc_kwargs '{"norm":"none"}' --sn_disc --lr 2e-4 --optimizer_kwargs '{"betas":[0.5,0.999]}' --batch_size 64 --method relativistic-gan --mixed_precision --channels_last` | 20.34 | No bn in discriminator. Spectral norm in discriminator. |
+SAGAN | Hinge | 256 | `python train_celeba.py --run_name sagan --model sagan --sn_disc --sn_gen --lr 2e-4 --optimizer_kwargs '{"betas":[0,0.9]}' --batch_size 256 --method hinge --mixed_precision --channels_last` | 6.73 | Spectral norm in discriminator and generator. Original SAGAN uses different learning rates for Generator (1e-4) and Discriminator (4e-4).  |
+Progressive GAN | Hinge | 64 | `python train_celeba.py --run_name progan_hinge --model progressive_gan --disc_kwargs '{"base_dim":64}' --sn_disc --gen_kwargs '{"base_dim":64}' --sn_gen --lr 2e-4 --optimizer_kwargs '{"betas":[0,0.9]}' --batch_size 64 --method hinge --mixed_precision --channels_last` | | No progressive growing and equalized learning rate like in the original. Use residual discriminator and generator (similar to StyleGAN2/SA-GAN). Trained with SA-GAN hyperparameters (Hinge loss, spectral norm for both discriminator and generator). |
+StyleGAN | Hinge | 64 | `python train_celeba.py --run_name stylegan_hinge_r1 --model stylegan --disc_kwargs '{"base_dim":64}' --gen_kwargs '{"base_dim":64}' --lr 2e-4 --optimizer_kwargs '{"betas":[0,0.9]}' --batch_size 64 --method hinge --regularizer r1 --mixed_precision --channels_last` | |
 
-Model | Loss | Batch size | FID | Note | Samples
-------|------|------------|------|-----|--------
-DCGAN | GAN | 128 | 45.69 | | ![dcgan_celeba](https://github.com/gau-nernst/gan/assets/26946864/fcbf8e3c-8fc6-4d06-8666-0332e6314ecb)
-DCGAN | WGAN | 64 | 28.86 | | ![dcgan_celeba_wgan](https://github.com/gau-nernst/gan/assets/26946864/6ea2f607-779c-4e3d-ba19-ce956300605e)
-DCGAN | WGAN-GP | 64 | 17.33 | No bn in discriminator | ![dcgan_celeba_wgan-gp](https://github.com/gau-nernst/gan/assets/26946864/7b2ba538-e05e-4f0f-b90d-0948ba18abf9)
-DCGAN | Hinge | 64 | 22.90 | (SN-GAN) No bn in discriminator. Spectral norm in discriminator | ![dcgan_celeba_sngan](https://github.com/gau-nernst/gan/assets/26946864/1a4f499c-d41e-4200-ad61-a647d0db2f72)
-DCGAN | Hinge | 64 | 19.22 | (SN-GAN w/ SA-GAN hyperparams) No bn in discriminator. Spectral norm in discriminator and generator | ![dcgan_celeba_sngan2](https://github.com/gau-nernst/gan/assets/26946864/3cebfd6f-60e9-4421-94c3-41413efa4e03)
-DCGAN | Relativistic GAN | 64 | 19.18 | No bn in discriminator. Spectral norm in discriminator | ![dcgan_celeba_rgan2](https://github.com/gau-nernst/gan/assets/26946864/f64d2cdc-2f9e-4c7c-a43d-570058a64284)
-DCGAN | Relativistic GAN | 64 | 15.55 | | ![dcgan_celeba_rgan](https://github.com/gau-nernst/gan/assets/26946864/53c53efb-96b2-4a88-9321-3a35cd0feb83)
-SAGAN | Hinge | 256 | 7.23 | Spectral norm in discriminator and generator | ![dcgan_celeba_sagan](https://github.com/gau-nernst/gan/assets/26946864/649b56ed-1052-4102-9a1d-a417c5126aa2)
-
-CelebA 256x256 (30k iterations)
+### CelebA 256x256
 
 DCGAN with Relativistic GAN loss
 
@@ -88,7 +74,9 @@ Progressive GAN with Hinge loss and spectral norm in Discriminator
 
 ![dcgan_celeba256_progran_resDresG_hinge](https://github.com/gau-nernst/gan/assets/26946864/a71647e7-c5e9-422f-9b0d-3bbfe402a6c9)
 
-Pix2Pix and CycleGAN (by default, dropout=0 since I don't see any benefits of using them)
+### Pix2Pix and CycleGAN
+
+By default, dropout=0 since I don't see any benefits of using them.
 
 ```bash
 python train_pix2pix.py --dataset cityscapes --mixed_precision --channels_last --compile --optimizer_kwargs '{"betas":[0.5,0.999]}' --run_name cityscapes
