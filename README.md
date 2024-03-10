@@ -51,18 +51,70 @@ pip install pytorch-fid tqdm wandb
 
 ### CelebA 64x64
 
-By default, the generator is trained for 30k iterations. EMA is always used. FID is calculated using 10k samples.
+Model | Loss | Batch size | Time↓ | FID↓ | Match original? | Note
+------|------|------------|-------|------|-----------------|-----
+DCGAN | Original GAN | 128 | 19m | 51.66 | ✅ |
+DCGAN | WGAN | 64 | 45m | 26.16 | ✅ |
+DCGAN | WGAN-GP | 64 | 47m | 17.26 | ✅ | No bn in discriminator.
+DCGAN | Hinge | 64 | 11m | 23.10 | | **SN-GAN**. No bn in discriminator. Spectral norm in discriminator.
+DCGAN | Relativistic GAN | 64 | 12m | 20.34 | ✅ | No bn in discriminator. Spectral norm in discriminator.
+SAGAN | Hinge | 256 | 2h 2m | 6.73 | | Spectral norm in discriminator and generator. Original SAGAN uses different learning rates for Generator (1e-4) and Discriminator (4e-4).
+Progressive GAN | Hinge | 64 | | |
+StyleGAN | Hinge | 64 | |
 
-Model | Loss | Batch size | Command | FID | Note | Samples
-------|------|------------|---------|-----|------|--------
-DCGAN | Original GAN | 128 | `python train_celeba.py --run_name dcgan --lr 2e-5 --optimizer_kwargs '{"betas":[0.5,0.999]}' --batch_size 128 --mixed_precision --channels_last` | 51.66 | |
-DCGAN | WGAN | 64 | `python train_celeba.py --run_name dcgan_wgan --lr 5e-5 --optimizer RMSprop --batch_size 64 --n_disc 5 --method wgan --mixed_precision --channels_last` | 26.16 | |
-DCGAN | WGAN-GP | 64 | `python train_celeba.py --run_name dcgan_wgangp --disc_kwargs '{"norm":"none"}' --lr 1e-4 --optimizer_kwargs '{"betas":[0,0.9]}' --batch_size 64 --n_disc 5 --method wgan --regularizer wgan-gp --mixed_precision --channels_last` | 17.26 | No bn in discriminator. |
-DCGAN | Hinge | 64 | `python train_celeba.py --run_name dcgan_sngan --disc_kwargs '{"norm":"none"}' --sn_disc --lr 1e-4 --optimizer_kwargs '{"betas":[0.5,0.999]}' --batch_size 64 --method hinge --mixed_precision --channels_last` | 23.10 | **SN-GAN**. No bn in discriminator. Spectral norm in discriminator. Original SN-GAN did not use DCGAN architecture. |
-DCGAN | Relativistic GAN | 64 | `python train_celeba.py --run_name dcgan_rgan --disc_kwargs '{"norm":"none"}' --sn_disc --lr 2e-4 --optimizer_kwargs '{"betas":[0.5,0.999]}' --batch_size 64 --method relativistic-gan --mixed_precision --channels_last` | 20.34 | No bn in discriminator. Spectral norm in discriminator. |
-SAGAN | Hinge | 256 | `python train_celeba.py --run_name sagan --model sagan --sn_disc --sn_gen --lr 2e-4 --optimizer_kwargs '{"betas":[0,0.9]}' --batch_size 256 --method hinge --mixed_precision --channels_last` | 6.73 | Spectral norm in discriminator and generator. Original SAGAN uses different learning rates for Generator (1e-4) and Discriminator (4e-4).  |
-Progressive GAN | Hinge | 64 | `python train_celeba.py --run_name progan_hinge --model progressive_gan --disc_kwargs '{"base_dim":64}' --sn_disc --gen_kwargs '{"base_dim":64}' --sn_gen --lr 2e-4 --optimizer_kwargs '{"betas":[0,0.9]}' --batch_size 64 --method hinge --mixed_precision --channels_last` | | No progressive growing and equalized learning rate like in the original. Use residual discriminator and generator (similar to StyleGAN2/SA-GAN). Trained with SA-GAN hyperparameters (Hinge loss, spectral norm for both discriminator and generator). |
-StyleGAN | Hinge | 64 | `python train_celeba.py --run_name stylegan_hinge_r1 --model stylegan --disc_kwargs '{"base_dim":64}' --gen_kwargs '{"base_dim":64}' --lr 2e-4 --optimizer_kwargs '{"betas":[0,0.9]}' --batch_size 64 --method hinge --regularizer r1 --mixed_precision --channels_last` | |
+By default, the generator is trained for 30k iterations. EMA is always used. FID is calculated using 10k samples. Training time is with RTX 4070 Ti SUPER, PyTorch 2.2.1 under WSL.
+
+**DCGAN with original GAN loss**
+
+```bash
+python train_celeba.py --run_name dcgan --lr 2e-5 --optimizer_kwargs '{"betas":[0.5,0.999]}' --batch_size 128 --mixed_precision --channels_last
+```
+
+**DCGAN with WGAN loss**
+
+```bash
+python train_celeba.py --run_name dcgan_wgan --lr 5e-5 --optimizer RMSprop --batch_size 64 --n_disc 5 --method wgan --mixed_precision --channels_last
+```
+
+**DCGAN with WGAN-GP loss**
+
+```bash
+python train_celeba.py --run_name dcgan_wgangp --disc_kwargs '{"norm":"none"}' --lr 1e-4 --optimizer_kwargs '{"betas":[0,0.9]}' --batch_size 64 --n_disc 5 --method wgan --regularizer wgan-gp --mixed_precision --channels_last
+```
+
+**DCGAN with SN-GAN hyperparameters**
+
+```bash
+python train_celeba.py --run_name dcgan_sngan --disc_kwargs '{"norm":"none"}' --sn_disc --lr 1e-4 --optimizer_kwargs '{"betas":[0.5,0.999]}' --batch_size 64 --method hinge --mixed_precision --channels_last
+```
+
+NOTE: Original SN-GAN did not use DCGAN architecture.
+
+**DCGAN with Relativistic GAN loss**
+
+```bash
+python train_celeba.py --run_name dcgan_rgan --disc_kwargs '{"norm":"none"}' --sn_disc --lr 2e-4 --optimizer_kwargs '{"betas":[0.5,0.999]}' --batch_size 64 --method relativistic-gan --mixed_precision --channels_last
+```
+
+**SAGAN**
+
+```bash
+python train_celeba.py --run_name sagan --model sagan --sn_disc --sn_gen --lr 2e-4 --optimizer_kwargs '{"betas":[0,0.9]}' --batch_size 256 --method hinge --mixed_precision --channels_last
+```
+
+**Progressive GAN**
+
+```bash
+python train_celeba.py --run_name progan_hinge --model progressive_gan --disc_kwargs '{"base_dim":64}' --sn_disc --gen_kwargs '{"base_dim":64}' --sn_gen --lr 2e-4 --optimizer_kwargs '{"betas":[0,0.9]}' --batch_size 64 --method hinge --mixed_precision --channels_last
+```
+
+NOTE: No progressive growing and equalized learning rate like in the original. Use residual discriminator and generator (similar to StyleGAN2/SA-GAN). Trained with SA-GAN hyperparameters (Hinge loss, spectral norm for both discriminator and generator).
+
+**StyleGAN**
+
+```bash
+`python train_celeba.py --run_name stylegan_hinge_r1 --model stylegan --disc_kwargs '{"base_dim":64}' --gen_kwargs '{"base_dim":64}' --lr 2e-4 --optimizer_kwargs '{"betas":[0,0.9]}' --batch_size 64 --method hinge --regularizer r1 --mixed_precision --channels_last`
+```
 
 ### CelebA 256x256
 
