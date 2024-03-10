@@ -5,14 +5,14 @@ import torch
 import torch.nn.functional as F
 import wandb
 from torch import Tensor
-from torch.utils.data import DataLoader, Dataset
+from torch.utils.data import Dataset
 from torchvision import io
 from tqdm import tqdm
 
 from diff_augment import rand_int, translate
 from losses import get_loss, get_regularizer
 from modelling import build_discriminator, build_generator
-from utils import EMA, cycle, make_parser, normalize_img, prepare_model, unnormalize_img
+from utils import EMA, make_parser, normalize_img, prepare_model, prepare_train_dloader, unnormalize_img
 
 
 torch.backends.cuda.matmul.allow_tf32 = True
@@ -116,10 +116,8 @@ if __name__ == "__main__":
     optim_g = optim_cls(gen.parameters(), cfg.lr, **cfg.optimizer_kwargs)
 
     ds = Pix2PixDataset("data", cfg.dataset, "train")
-    dloader = DataLoader(
-        ds, cfg.batch_size // cfg.grad_accum, shuffle=True, num_workers=4, pin_memory=True, drop_last=True
-    )
-    dloader = cycle(dloader)
+    _bsize = cfg.batch_size // cfg.grad_accum
+    dloader = prepare_train_dloader(ds, _bsize, device=cfg.device, channels_last=cfg.channels_last)
 
     autocast_ctx = torch.autocast(cfg.device, dtype=torch.bfloat16, enabled=cfg.mixed_precision)
     val_ds = Pix2PixDataset("data", cfg.dataset, "test" if cfg.dataset == "night2day" else "val")
@@ -133,7 +131,7 @@ if __name__ == "__main__":
     fixed_Bs = torch.stack(fixed_Bs, 0).to(cfg.device)
 
     logger = wandb.init(project="pix2pix", name=cfg.run_name, config=vars(cfg))
-    log_img_dir = Path("images") / cfg.run_name
+    log_img_dir = Path("images_pix2pix") / cfg.run_name
     log_img_dir.mkdir(parents=True, exist_ok=True)
 
     reals = fixed_As.unflatten(0, (10, 10)).permute(2, 0, 3, 1, 4).flatten(1, 2).flatten(-2, -1)
@@ -144,12 +142,6 @@ if __name__ == "__main__":
     while step < cfg.n_iters:
         for _ in range(cfg.grad_accum):
             As, Bs = next(dloader)
-            As = As.to(cfg.device)
-            Bs = Bs.to(cfg.device)
-
-            if cfg.channels_last:
-                As = As.to(memory_format=torch.channels_last)
-                Bs = Bs.to(memory_format=torch.channels_last)
 
             with autocast_ctx:
                 with torch.no_grad():

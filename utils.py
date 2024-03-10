@@ -5,6 +5,7 @@ import json
 
 import torch
 from torch import Tensor, nn
+from torch.utils.data import DataLoader, Dataset
 
 
 def make_parser(fn):
@@ -47,10 +48,27 @@ def prepare_model(
         model.compile()
 
 
-def cycle(iterator):
+def _tensor_to(x, *, device=None, channels_last: bool = False):
+    if isinstance(x, Tensor):
+        if channels_last and x.ndim == 4:
+            return x.to(device=device, memory_format=torch.channels_last)
+        else:
+            return x.to(device=device)
+    elif isinstance(x, (tuple, list)):
+        return x.__class__(_tensor_to(item, device=device, channels_last=channels_last) for item in x)
+    else:
+        raise ValueError(f"Unuspported type {type(x)}")
+
+
+def cycle(iterator, *, device=None, channels_last: bool = False):
     while True:
         for x in iterator:
-            yield x
+            yield _tensor_to(x, device=device, channels_last=channels_last)
+
+
+def prepare_train_dloader(ds: Dataset, batch_size: int, *, device=None, channels_last: bool = False):
+    dloader = DataLoader(ds, batch_size, shuffle=True, num_workers=4, pin_memory=True, drop_last=True)
+    return cycle(dloader, device=device, channels_last=channels_last)
 
 
 # reference: https://github.com/lucidrains/ema-pytorch

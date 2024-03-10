@@ -5,14 +5,14 @@ import torch
 import torch.nn.functional as F
 import wandb
 from torch import Tensor
-from torch.utils.data import DataLoader, Dataset
+from torch.utils.data import Dataset
 from torchvision import io
 from torchvision.transforms import v2
 from tqdm import tqdm
 
 from losses import get_loss, get_regularizer
 from modelling import build_discriminator, build_generator
-from utils import EMA, cycle, make_parser, normalize_img, prepare_model, unnormalize_img
+from utils import EMA, make_parser, normalize_img, prepare_model, prepare_train_dloader, unnormalize_img
 
 
 torch.backends.cuda.matmul.allow_tf32 = True
@@ -132,14 +132,9 @@ if __name__ == "__main__":
 
     train_ds_A = CycleGanDataset("data", cfg.dataset, "trainA")
     train_ds_B = CycleGanDataset("data", cfg.dataset, "trainB")
-    dloader_A = DataLoader(
-        train_ds_A, cfg.batch_size // cfg.grad_accum, shuffle=True, num_workers=4, pin_memory=True, drop_last=True
-    )
-    dloader_B = DataLoader(
-        train_ds_B, cfg.batch_size // cfg.grad_accum, shuffle=True, num_workers=4, pin_memory=True, drop_last=True
-    )
-    dloader_A = cycle(dloader_A)
-    dloader_B = cycle(dloader_B)
+    _bsize = cfg.batch_size // cfg.grad_accum
+    dloader_A = prepare_train_dloader(train_ds_A, _bsize, device=cfg.device, channels_last=cfg.channels_last)
+    dloader_B = prepare_train_dloader(train_ds_B, _bsize, device=cfg.device, channels_last=cfg.channels_last)
 
     autocast_ctx = torch.autocast(cfg.device, dtype=torch.bfloat16, enabled=cfg.mixed_precision)
     val_ds_A = CycleGanDataset("data", cfg.dataset, "testA")
@@ -165,12 +160,8 @@ if __name__ == "__main__":
     pbar = tqdm(total=cfg.n_iters, dynamic_ncols=True)
     while step < cfg.n_iters:
         for _ in range(cfg.grad_accum):
-            As = next(dloader_A).to(cfg.device)
-            Bs = next(dloader_B).to(cfg.device)
-
-            if cfg.channels_last:
-                As = As.to(memory_format=torch.channels_last)
-                Bs = Bs.to(memory_format=torch.channels_last)
+            As = next(dloader_A)
+            Bs = next(dloader_B)
 
             with autocast_ctx:
                 with torch.no_grad():

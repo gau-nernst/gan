@@ -4,7 +4,6 @@ from pathlib import Path
 import torch
 import wandb
 from torch import nn
-from torch.utils.data import DataLoader
 from torchvision import datasets, io
 from torchvision.transforms import v2
 from tqdm import tqdm
@@ -13,7 +12,7 @@ from diff_augment import DiffAugment
 from fid import FID
 from losses import get_loss, get_regularizer
 from modelling import build_discriminator, build_generator
-from utils import EMA, cycle, make_parser, prepare_model, unnormalize_img
+from utils import EMA, make_parser, prepare_model, prepare_train_dloader, unnormalize_img
 
 
 torch.backends.cuda.matmul.allow_tf32 = True
@@ -79,18 +78,16 @@ if __name__ == "__main__":
 
     transform = v2.Compose(
         [
-            v2.ToImage(),
             v2.Resize(cfg.img_size, interpolation=v2.InterpolationMode.BICUBIC, antialias=True),
             v2.CenterCrop(cfg.img_size),
+            v2.ToImage(),
             v2.ToDtype(torch.float32, scale=True),
             v2.Normalize([0.5, 0.5, 0.5], [0.5, 0.5, 0.5]),
         ]
     )
     ds = datasets.CelebA("data", transform=transform, download=True)
-    dloader = DataLoader(
-        ds, cfg.batch_size // cfg.grad_accum, shuffle=True, num_workers=4, pin_memory=True, drop_last=True
-    )
-    dloader = cycle(dloader)
+    _bsize = cfg.batch_size // cfg.grad_accum
+    dloader = prepare_train_dloader(ds, _bsize, device=cfg.device, channels_last=cfg.channels_last)
 
     autocast_ctx = torch.autocast(cfg.device, dtype=torch.bfloat16, enabled=cfg.mixed_precision)
     fixed_zs = torch.randn(100, 128, device=cfg.device)
@@ -99,7 +96,7 @@ if __name__ == "__main__":
     celeba_stats_path = Path(f"celeba{cfg.img_size}_stats.pth")
 
     if not celeba_stats_path.exists():
-        celeba_stats = fid_scorer.compute_stats(lambda: next(dloader)[0].to(cfg.device))
+        celeba_stats = fid_scorer.compute_stats(lambda: next(dloader)[0])
         torch.save(celeba_stats, celeba_stats_path)
 
     else:
@@ -122,9 +119,6 @@ if __name__ == "__main__":
 
             for _ in range(cfg.grad_accum):
                 reals, _ = next(dloader)
-                reals = reals.to(cfg.device)
-                if cfg.channels_last:
-                    reals = reals.to(memory_format=torch.channels_last)
                 if cached_reals is not None:
                     cached_reals.append(reals.clone())  # cached for generator later
                 reals.requires_grad_()
