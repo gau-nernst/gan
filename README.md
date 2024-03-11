@@ -53,7 +53,7 @@ pip install pytorch-fid tqdm wandb
 
 Model | Loss | Batch size | Time↓ | FID↓ | Match original? | Note
 ------|------|------------|-------|------|-----------------|-----
-DCGAN | Original GAN | 128 | 19m | 51.66 | ✅ |
+DCGAN | Original GAN | 128 | 19m | 48.59 | ✅ |
 DCGAN | WGAN | 64 | 45m | 26.16 | ✅ |
 DCGAN | WGAN-GP | 64 | 47m | 17.26 | ✅ | No bn in discriminator.
 DCGAN | Hinge | 64 | 11m | 23.10 | | **SN-GAN**. No bn in discriminator. Spectral norm in discriminator.
@@ -118,22 +118,29 @@ NOTE: No progressive growing and equalized learning rate like in the original. U
 
 ### CelebA 256x256
 
-DCGAN with Relativistic GAN loss
-
-![dcgan_celeba256_rgan](https://github.com/gau-nernst/gan/assets/26946864/9deaeb5d-c618-45a6-96d7-a3572ef52ba9)
-
-Progressive GAN with Hinge loss and spectral norm in Discriminator
-
-![dcgan_celeba256_progran_resDresG_hinge](https://github.com/gau-nernst/gan/assets/26946864/a71647e7-c5e9-422f-9b0d-3bbfe402a6c9)
+TODO
 
 ### Pix2Pix and CycleGAN
 
 By default, dropout=0 since I don't see any benefits of using them.
 
 ```bash
-python train_pix2pix.py --dataset cityscapes --mixed_precision --channels_last --compile --optimizer_kwargs '{"betas":[0.5,0.999]}' --run_name cityscapes
-python train_cyclegan.py --dataset horse2zebra --mixed_precision --channels_last --compile --optimizer_kwargs '{"betas":[0.5,0.999]}' --run_name horse2zebra
+python train_pix2pix.py --dataset cityscapes --optimizer_kwargs '{"betas":[0.5,0.999]}' --run_name cityscapes --mixed_precision --channels_last --compile
+python train_cyclegan.py --dataset horse2zebra --optimizer_kwargs '{"betas":[0.5,0.999]}' --run_name horse2zebra --mixed_precision --channels_last --compile
 ```
+
+NOTE:
+
+- `beta1=0.5` is not mentioned in paper, but is used in the code. Like other GAN training, having a low `beta1` is crucical for GAN convergence.
+- For CycleGAN, I simply train with batch size = 8 (to fit in 16GB VRAM), instead of batch size = 1 like in the original. Training discriminator with past generated samples is also not implemented.
+
+### StarGAN
+
+TODO
+
+### SRGAN and ESRGAN
+
+TODO
 
 ## Lessons
 
