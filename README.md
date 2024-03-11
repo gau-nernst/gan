@@ -70,17 +70,23 @@ By default, the generator is trained for 30k iterations. EMA is always used. FID
 python train_celeba.py --run_name dcgan --lr 2e-5 --optimizer_kwargs '{"betas":[0.5,0.999]}' --batch_size 128 --mixed_precision --channels_last
 ```
 
+![dcgan](https://github.com/gau-nernst/gan/assets/26946864/72cbeb72-f661-41f3-a720-97fc83f81c79)
+
 **DCGAN with WGAN loss**
 
 ```bash
 python train_celeba.py --run_name dcgan_wgan --lr 5e-5 --optimizer RMSprop --batch_size 64 --n_disc 5 --method wgan --mixed_precision --channels_last
 ```
 
+![dcgan_wgan](https://github.com/gau-nernst/gan/assets/26946864/54aa2327-5ea4-4e5c-b194-106aa012f752)
+
 **DCGAN with WGAN-GP loss**
 
 ```bash
 python train_celeba.py --run_name dcgan_wgangp --disc_kwargs '{"norm":"none"}' --lr 1e-4 --optimizer_kwargs '{"betas":[0,0.9]}' --batch_size 64 --n_disc 5 --method wgan --regularizer wgan-gp --mixed_precision --channels_last
 ```
+
+![dcgan_wgangp](https://github.com/gau-nernst/gan/assets/26946864/fe4139c1-d7e4-4875-8ab9-1310a700f1a8)
 
 **DCGAN with SN-GAN hyperparameters**
 
@@ -90,17 +96,23 @@ python train_celeba.py --run_name dcgan_sngan --disc_kwargs '{"norm":"none"}' --
 
 NOTE: Original SN-GAN did not use DCGAN architecture.
 
+![dcgan_sngan](https://github.com/gau-nernst/gan/assets/26946864/93055542-42c4-48c3-b4fc-3ba07391aa6b)
+
 **DCGAN with Relativistic GAN loss**
 
 ```bash
 python train_celeba.py --run_name dcgan_rgan --disc_kwargs '{"norm":"none"}' --sn_disc --lr 2e-4 --optimizer_kwargs '{"betas":[0.5,0.999]}' --batch_size 64 --method relativistic-gan --mixed_precision --channels_last
 ```
 
+![dcgan_rgan](https://github.com/gau-nernst/gan/assets/26946864/823220bc-08a0-4554-b85d-cd1098703cd9)
+
 **SAGAN**
 
 ```bash
 python train_celeba.py --run_name sagan --model sagan --sn_disc --sn_gen --lr 2e-4 --optimizer_kwargs '{"betas":[0,0.9]}' --batch_size 256 --method hinge --mixed_precision --channels_last
 ```
+
+![sagan](https://github.com/gau-nernst/gan/assets/26946864/17fd64a2-1c05-4586-9b50-bc27aa7cfb51)
 
 **Progressive GAN**
 
