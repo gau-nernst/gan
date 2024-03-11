@@ -1,4 +1,3 @@
-from .cgan import CGANDiscriminator, CGANGenerator
 from .cyclegan import ResNetGenerator
 from .dcgan import DcGanDiscriminator, DcGanGenerator
 from .esrgan import ESRGANGenerator
@@ -19,7 +18,6 @@ def build_generator(name: str, *args, **kwargs):
         stylegan=StyleGanGenerator,
         stylegan2=StyleGan2Generator,
         sagan=SaGanGenerator,
-        cgan=CGANGenerator,
         pix2pix=UnetGenerator,
         cyclegan=ResNetGenerator,
         srgan=SRResNet,
@@ -36,7 +34,6 @@ def build_discriminator(name: str, *args, **kwargs):
         stylegan=ProgressiveGanDiscriminator,
         stylegan2=ProgressiveGanDiscriminator,
         sagan=SaGanDiscriminator,
-        cgan=CGANDiscriminator,
         pix2pix=PatchGan,
         cyclegan=PatchGan,
         srgan=SRGANDiscriminator,

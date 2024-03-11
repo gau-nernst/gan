@@ -4,27 +4,18 @@ Features:
 
 - GAN losses:
   - [Original GAN loss](https://arxiv.org/abs/1406.2661) (non-saturating version i.e. replace `log(1-sigmoid(d(x)))` with `logsigmoid(-d(x))`)
-  - [WGAN](https://arxiv.org/abs/1701.07875)
+  - [WGAN](https://arxiv.org/abs/1701.07875) and [WGAN-GP](https://arxiv.org/abs/1704.00028)
   - [Hinge loss](https://arxiv.org/abs/1802.05957)
   - [LSGAN](https://arxiv.org/abs/1611.04076)
   - [Relativistic GAN](https://arxiv.org/abs/1807.00734)
-- GAN regularization:
-  - [WGAN-GP](https://arxiv.org/abs/1704.00028)
-  - [R1](https://arxiv.org/abs/1801.04406)
-- Others:
-  - [DiffAuugment](https://arxiv.org/abs/2006.10738)
+- GAN regularization: [R1](https://arxiv.org/abs/1801.04406)
+- Others: [DiffAuugment](https://arxiv.org/abs/2006.10738)
 - Architectures
   - [DCGAN](https://arxiv.org/abs/1511.06434)
-  - Conditional GAN (modified for CNN) (TODO: remove)
-  - NVIDIA GANs:
-    - (Modified) [Progressive GAN](https://arxiv.org/pdf/1710.10196)
-    - (Modified) [StyleGAN](https://arxiv.org/abs/1812.04948)
-    - (Modified) [StyleGAN2](https://arxiv.org/abs/1912.04958)
+  - (Modified) NVIDIA GANs: [Progressive GAN](https://arxiv.org/pdf/1710.10196), [StyleGAN](https://arxiv.org/abs/1812.04948), [StyleGAN2](https://arxiv.org/abs/1912.04958)
   - [SA-GAN](https://arxiv.org/pdf/1805.08318)
 - Img2Img:
-  - [Pix2Pix](https://arxiv.org/abs/1611.07004) / [CycleGAN](https://arxiv.org/abs/1703.10593): PatchGAN discriminator, Unet and ResNet generator
-    - Dropout not included. Batch norm is replaced with Instance norm.
-    - Not implemented: train Discrimiantor with past generated samples
+  - [Pix2Pix](https://arxiv.org/abs/1611.07004) / [CycleGAN](https://arxiv.org/abs/1703.10593): PatchGAN discriminator, Unet and ResNet generator (Batch norm is replaced with Instance norm).
   - TODO: Pix2PixHD, AnimeGAN, SRGAN, ESRGAN, StarGAN
 
 TODO:
